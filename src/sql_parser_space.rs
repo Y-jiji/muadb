@@ -5,7 +5,7 @@ use crate::util_pratt_parser::*;
 // Each SQL is allocated in this holder structure. 
 // We also use it for symbol table and as parsing cache. 
 pub struct SQLSpace<'a> {
-    bump: &'a Bump,
+    pub bump: &'a Bump,
     tag_slice: RefCell<&'a mut [BVec<'a, u16>]>,
     res_slice: RefCell<&'a mut [BVec<'a, Option<&'a u8>>]>,
 }
