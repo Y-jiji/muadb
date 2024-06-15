@@ -39,9 +39,9 @@ impl<'a, O, E> Extra<O, E> for SQLSpace<'a> {
     fn err(&self, e: E) -> &E { self.bump.alloc(e) }
 }
 
-impl<'a> SQLSpace<'a> {
-    pub fn new(bump: &'a Bump, input: &str) -> Self {
-        Self {
+impl<'c> SQLSpace<'c> {
+    pub fn new<'a, 'b>(bump: &'a Bump, input: &'b str) -> SQLSpace<'a> {
+        SQLSpace {
             bump,
             tag_slice: RefCell::new(bump.alloc_slice_fill_with(input.len()+1, |_| BVec::with_capacity_in(10, bump))),
             res_slice: RefCell::new(bump.alloc_slice_fill_with(input.len()+1, |_|BVec::with_capacity_in(10, bump)))

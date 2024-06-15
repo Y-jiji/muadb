@@ -95,31 +95,6 @@ where
         }
     }
 }
-// impl<'p, P, Q> Div<Q> for Tag<'p, P>
-//     where P: Parser<'p>, 
-//           Q: Parser<'p, X = X>,
-//           X: Extra<(&'p O, &'p Q::O), Either<&'p E, &'p Q::E>>,
-//           X: Extra<O, Either<&'p E, &'p Q::E>>,
-// {
-//     type Output = Tag<'p, MapOut<'p, Then<'p, Tag<'p, P>, Q>, O, fn(&'p X, &'p (&'p O, &'p Q::O)) -> &'p O>>;
-//     fn div(self, rhs: Q) -> Output {
-//         fn unwrap<'q, E: 'q, A: 'q, B: 'q, X: Extra<A, E>>(x: &'q X, (y, _): &'q (&'q A, &'q B)) -> &'q A {
-//             *y
-//         }
-//         Tag::new(Then { lhs: self, rhs, phantom: PhantomData }).out(unwrap)
-//     }
-// }
-// impl<'p, P, Z: 'p, FOLD, INI> Shr<(INI, FOLD)> for Tag<'p, P>
-//     where P: Parser<'p>, 
-//     X: Extra<Z, ()>,
-//     FOLD: Fn(&'p X, &'p mut Z, &'p O) -> &'p mut Z,
-//     INI: Fn(&'p X) -> &'p mut Z
-// {
-//     type Output = Tag<'p, Repeat<'p, Tag<'p, P>, Z, INI, FOLD>>;
-//     fn shr(self, (ini, fold): (INI, FOLD)) -> Output {
-//         Tag::new(Repeat(self, ini, fold, PhantomData))
-//     }
-// }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Either<L, R> {L(L), R(R)}
@@ -239,6 +214,21 @@ impl<'p, OP, EP, OQ, EQ, X, P, Q> BitOr<Tag<'p, OQ, EQ, X, Q>> for Tag<'p, OP, E
         Tag::new(Else { lhs: self, rhs, phant: PhantomData })
     }
 }
+impl<'p, O, EP, EQ, X, P, Q> BitXor<Tag<'p, O, EQ, X, Q>> for Tag<'p, O, EP, X, P>
+where 
+    O: 'p, EP: 'p, EQ: 'p, 
+    X: Extra<Either<&'p O, &'p O>, (&'p EP, &'p EQ)> + Extra<O, (&'p EP, &'p EQ)> + Extra<O, EP> + Extra<O, EQ> + 'p, 
+    P: Parser<'p, O, EP, X>, 
+    Q: Parser<'p, O, EQ, X>
+{
+    type Output = Tag<'p, O, (&'p EP, &'p EQ), X, MapOut<'p, Either<&'p O, &'p O>, (&'p EP, &'p EQ), X, Else<'p, O, EP, O, EQ, X, Tag<'p, O, EP, X, P>, Tag<'p, O, EQ, X, Q>>, O, fn(&'p  X, &'p  Either<&'p  O, &'p  O>) -> &'p O>>;
+    fn bitxor(self, rhs: Tag<'p, O, EQ, X, Q>) -> Self::Output {
+        fn map<'p, A, Z>(a: &'p A, b: &'p Either<&'p Z, &'p Z>) -> &'p Z {
+            match b { Either::L(x) => x, Either::R(x) => x }
+        }
+        (self | rhs).out(map)
+    }
+}
 
 struct Helper<'p, O: 'p, E: 'p, X> {
     // pointer to external parser object
@@ -322,6 +312,22 @@ where P: Parser<'p, O, E, X>,
             progress = progress_new;
             ini = out;
         }
+    }
+}
+impl<'p, O, E, X, P, Z, INIT, FOLD> Shr<(INIT, FOLD)> for Tag<'p, O, E, X, P>
+where P: Parser<'p, O, E, X>, 
+      O: 'p, E: 'p, X: 'p, Z: 'p,
+      FOLD: Fn(&'p X, &'p mut Z, &'p O) -> &'p mut Z,
+      INIT: Fn(&'p X) -> &'p mut Z,
+      X: Extra<O, E> + Extra<Z, E>,
+{
+    type Output = Tag<'p, Z, E, X, Repeat<'p, O, E, X, Tag<'p, O, E, X, P>, Z, INIT, FOLD>>;
+    fn shr(self, (init, fold): (INIT, FOLD)) -> Self::Output {
+        Tag::new(Repeat{
+            inner: self,
+            fold, init,
+            phantom: PhantomData
+        })
     }
 }
 

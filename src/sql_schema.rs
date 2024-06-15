@@ -2,6 +2,7 @@ use crate::{sql_parser_expr::SQLError, sql_parser_space::SQLSpace, util_pratt_pa
 use bumpalo::collections::Vec as BVec;
 
 // SQLSchema
+#[derive(Debug)]
 pub enum SQLSchema<'a> {
     NamedTuple {
         name:  &'a[&'a str],
@@ -15,25 +16,36 @@ pub enum SQLSchema<'a> {
     Nil, F32, F64, Str, 
 }
 
-// type SQLParser<'a> = Tag<'a, Recursive<'a, SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>>>;
+type SQLTag<'a, P> = Tag<'a, SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>, P>;
+type SQLRec<'a> = Recursive<'a, SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>>;
 
-// fn sql_parser_schema<'a>() -> SQLParser<'a> {
-//     recurse(|this| {
-//         (Token::new("(") + parse_tuple(this) + Token::new(")"))
-//             .out(|extra: &'a SQLSpace<'a>, ((_, x), _)| *x)
-//             .err(|extra: &'a SQLSpace<'a>, _| extra.bump.alloc(SQLError::Unknown))
-//     })
-// }
+pub fn sql_parser_schema<'a>() -> SQLTag<'a, SQLRec<'a>> {
+    recurse(|this| {
+        let tuple = (this / (Pad::new() / Token::new(",") / Pad::new())) >> (
+            |extra: &'a SQLSpace<'a>| extra.bump.alloc(BVec::with_capacity_in(5, extra.bump)),
+            |extra, collector: &'a mut BVec<'a, _>, another| { collector.push(another); collector }
+        );
+        let tuple = Token::new("(") % (tuple / Token::new(")"));
+        let tuple = tuple.out(|extra, tuple| extra.bump.alloc(SQLSchema::Tuple { tuple }));
+        let i64 = Token::new("i64").out(|extra: &'a SQLSpace<'a>, _| extra.bump.alloc(SQLSchema::I64));
+        return (tuple ^ i64).err(|extra, _| extra.bump.alloc(SQLError::Unknown));
+    })
+}
 
-// fn parse_tuple<'a>(parser: SQLParser<'a>) -> impl Parser<'a, O=SQLSchema<'a>, E=SQLError<'a>, X=SQLSpace<'a>> {
-//     fn init<'a>(extra: &'a SQLSpace<'a>) -> &'a mut BVec<'a, &'a SQLSchema<'a>> {
-//         extra.bump.alloc(BVec::with_capacity_in(5, extra.bump))
-//     }
-//     fn fold<'a, A>(extra: &'a SQLSpace<'a>, collector: &'a mut BVec<'a, &'a SQLSchema<'a>>, next: &'a (&'a SQLSchema<'a>, &'a A)) -> &'a mut BVec<'a, &'a SQLSchema<'a>> {
-//         collector.push(next.0);
-//         collector
-//     }
-//     (parser + Pad::new() % Token::new(",") >> (init, fold))
-//     .out(|extra: &'a SQLSpace<'a>, tuple: &'a _| extra.bump.alloc(SQLSchema::Tuple { tuple }))
-//     .err(|extra: &'a SQLSpace<'a>, _| extra.bump.alloc(SQLError::Unknown))
-// }
+#[cfg(test)]
+mod test {
+    use bumpalo::Bump;
+    use super::*;
+
+    #[test]
+    fn parse_tuple() {
+        let input = "(i64, i64, i64)";
+        let bump = Bump::new();
+        fn parse<'a>(bump: &'a Bump, input: &str) {
+            let parser = sql_parser_schema();
+            let space = SQLSpace::new(&bump, input);
+            parser.parse(input, 0, space);
+        }
+    }
+
+}
