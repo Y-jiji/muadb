@@ -1,9 +1,15 @@
+//! Another precedence parser known as Pratt parsing was first described by Vaughan Pratt 
+//! in the 1973 paper "Top down operator precedence",[3] based on recursive descent. 
+//! -- Wikipedia
+
+//! TODO: record only on recursive entry points. 
+
 use std::{any::Any, cell::OnceCell, fmt::Debug, marker::PhantomData, ops::{Add, BitOr, BitXor, Shr, Rem}, os::unix::process, sync::{atomic::AtomicU64, Arc}};
 
 // memorization buffer + output/error allocation buffer
 pub trait Extra<O, E> {
     // mark a progress is visited by a parser
-    fn mark(&self, progress: usize, tag: u64) {}
+    fn mark(&self, progress: usize, tag: u64) { }
     // record execution result
     fn record(&self, progress: usize, tag: u64, result: Result<(usize, &O), (usize, &E)>)   {  }
     // replay an expression
@@ -14,6 +20,7 @@ pub trait Extra<O, E> {
     fn err(&self, e: E) -> &E;
 }
 
+// a general parser trait
 pub trait Parser<'p>: Sized {
     type O: 'p;
     type E: 'p;
@@ -296,6 +303,34 @@ impl<'p, P: Parser<'p>, Z: 'p> Parser<'p> for MapErr<'p, P, Z>
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Token<X: Extra<(), &'static str>> {
+    token: &'static str, 
+    alloc: PhantomData<X>,
+}
+impl<'a, X> Token<X>
+    where X: Extra<(), &'static str> + 'a
+{
+    pub fn new(token: &'static str) -> Tag<'a, Self> {
+        Tag::new(Token { token, alloc: PhantomData })
+    }
+}
+impl<'a, X> Parser<'a> for Token<X>
+    where X: Extra<(), &'static str> + 'a
+{
+    type E = &'static str;
+    type O = ();
+    type X = X;
+    fn parse(&self, input: &str, progress: usize, extra: &'a Self::X) -> Result<(usize, &'a Self::O), (usize, &'a Self::E)> {
+        if input[progress..].starts_with(self.token) {
+            Ok((progress + self.token.len(), extra.out(())))
+        }
+        else {
+            Err((progress, extra.err(self.token)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -310,35 +345,18 @@ mod test {
         }
     }
 
-    pub struct Token(&'static str);
-    #[derive(Debug)]
-    pub struct NotMatch(&'static str);
-    impl<'a> Parser<'a> for Token {
-        type E = NotMatch;
-        type O = &'static str;
-        type X = Bump;
-        fn parse(&self, input: &str, progress:usize, extra: &'a Self::X) -> Result<(usize, &'a Self::O), (usize, &'a Self::E)> {
-            if input[progress..].starts_with(self.0) {
-                Ok((progress + self.0.len(), extra.alloc(self.0)))
-            }
-            else {
-                Err((progress, extra.alloc(NotMatch(self.0))))
-            }
-        }
-    }
-
     #[test]
     fn alphabet() {
         let bump = Bump::new();
-        let a = || Tag::new(Token("a"));
-        let b = || Tag::new(Token("b"));
+        let a = || Token::new("a");
+        let b = || Token::new("b");
         fn take_left<A, B, C>(_: C, (a, b): (A, B)) -> A { a }
         fn unwrap<A, B, C>(_: C, a: Either<A, B>) -> () { () }
         let parser = recurse::<i64, (), Bump, _>(|this| {
             (a() + this.clone()).out(|extra, (lhs, rhs)| {
                 extra.alloc(**rhs + 20)
             }) 
-            ^ (b().out(|extra, _| extra.alloc(1)))
+            ^ (b().out(|extra: &Bump, _| extra.alloc(1)))
         }.err(|extra, _| extra.alloc(())));
         // let parser = a() + b();
         let example = "aaabb";
