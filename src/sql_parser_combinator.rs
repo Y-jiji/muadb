@@ -1,240 +1,223 @@
-use std::{cell::OnceCell, marker::PhantomData, ops::{Add, BitOr}, sync::atomic::AtomicU64};
+use std::{any::Any, cell::OnceCell, fmt::Debug, marker::PhantomData, ops::{Add, BitOr}, os::unix::process, sync::{atomic::AtomicU64, Arc}};
 
 #[allow(unused)]
-pub trait Extra<'a, O, E> {
-    fn record(&self, progress: usize, tag: u64, result: Result<(usize, O), (usize, E)>) {  }
-    fn replay(&self, progress: usize, tag: u64) -> Option<Result<(usize, O), (usize, E)>> { None }
+pub trait Extra<O, E> {
+    fn record(&self, progress: usize, tag: u64, result: Result<(usize, &O), (usize, &E)>)   {  }
+    fn replay(&self, progress: usize, tag: u64) -> Option<Result<(usize, &O), (usize, &E)>> { None }
+    fn out(&self, o: O) -> &O;
+    fn err(&self, e: E) -> &E;
 }
-
-#[allow(type_alias_bounds)]
-pub type PResult<'a, P: Parser> = Result<(usize, P::O<'a>), (usize, P::E<'a>)>;
-static COUNT: AtomicU64 = AtomicU64::new(1);
 
 #[auto_impl::auto_impl(Box, &)]
-pub trait Parser: Sized {
-    type O<'a>: Clone;
-    type E<'a>: Clone;
-    type X<'a>: Extra<'a, Self::O<'a>, Self::E<'a>> + Clone;
-    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self>;
+pub trait Parser<'p>: Sized {
+    type O: 'p;
+    type E: 'p;
+    type X: Extra<Self::O, Self::E>;
+    fn parse(&self, input: &str, progress: usize, extra: &'p Self::X) -> Result<(usize, &'p Self::O), (usize, &'p Self::E)>;
+    fn tag(&self) -> u64 { 0 }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Memorized<P: Parser>(P, u64);
-impl<P: Parser> Parser for Memorized<P> {
-    type O<'a> = P::O<'a>;
-    type E<'a> = P::E<'a>;
-    type X<'a> = P::X<'a>;
-    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
-        if let Some(result) = extra.clone().replay(progress, self.1) {
+pub struct Memorized<P: for<'p> Parser<'p>>{inner: P, tag: u64}
+impl<'q, P: for<'p> Parser<'p>> Parser<'q> for Memorized<P> {
+    type O = <P as Parser<'q>>::O;
+    type E = <P as Parser<'q>>::E;
+    type X = <P as Parser<'q>>::X;
+    fn parse(&self, input: &str, progress: usize, extra: &'q Self::X) -> Result<(usize, &'q Self::O), (usize, &'q Self::E)> {
+        if let Some(result) = extra.replay(progress, self.tag) {
             return result;
         }
-        let result = self.0.parse(input, progress, extra.clone());
-        extra.record(progress, self.1, result.clone());
+        let result = self.inner.parse(input, progress, extra);
+        extra.record(progress, self.tag, result.clone());
         return result;
     }
+    fn tag(&self) -> u64 { self.tag }
 }
-impl<P: Parser> Memorized<P> {
+impl<'q, P: for<'p> Parser<'p>> Memorized<P> {
     pub fn new(inner: P) -> Self {
-        Memorized(inner, COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+        static COUNT: AtomicU64 = AtomicU64::new(1);
+        use std::sync::atomic::Ordering::SeqCst;
+        let tag = if inner.tag() != 0 { inner.tag() } else { COUNT.fetch_add(1, SeqCst) };
+        Memorized{inner, tag}
+    }
+}
+impl<P: for<'p> Parser<'p>, Q: for<'q> Parser<'q, X=<P as Parser<'q>>::X>> Add<Memorized<Q>> for Memorized<P> 
+    where P: for<'p> Parser<'p>, 
+          Q: for<'q> Parser<'q, X = <P as Parser<'q>>::X>,
+          for<'r> <P as Parser<'r>>::X: Extra<(&'r <P as Parser<'r>>::O, &'r <Q as Parser<'r>>::O), Either<&'r <P as Parser<'r>>::E, &'r <Q as Parser<'r>>::E>> 
+{
+    type Output = Memorized<Then<Memorized<P>, Memorized<Q>>>;
+    fn add(self, rhs: Memorized<Q>) -> Self::Output {
+        Memorized::new(Then { lhs: self, rhs })
+    }
+}
+impl<P: for<'p> Parser<'p>, Q: for<'q> Parser<'q, X=<P as Parser<'q>>::X>> BitOr<Memorized<Q>> for Memorized<P> 
+    where P: for<'p> Parser<'p>, 
+          Q: for<'q> Parser<'q, X = <P as Parser<'q>>::X>,
+          for<'r> <P as Parser<'r>>::X: Extra<Either<&'r <P as Parser<'r>>::O, &'r <Q as Parser<'r>>::O>, (&'r <P as Parser<'r>>::E, &'r <Q as Parser<'r>>::E)> 
+{
+    type Output = Memorized<Else<Memorized<P>, Memorized<Q>>>;
+    fn bitor(self, rhs: Memorized<Q>) -> Self::Output {
+        Memorized::new(Else { lhs: self, rhs })
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Recursive<P: Parser>(OnceCell<P>);
-impl<P: Parser> Parser for Recursive<P> {
-    type O<'a> = P::O<'a>;
-    type E<'a> = P::E<'a>;
-    type X<'a> = P::X<'a>;
-    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
-        self.0.get().unwrap().parse(input, progress, extra)
+#[derive(Debug, Clone, Copy)]
+pub enum Either<L, R> {L(L), R(R)}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Then<P, Q>
+    where P: for<'p> Parser<'p>, 
+          Q: for<'q> Parser<'q, X = <P as Parser<'q>>::X>
+{lhs: P, rhs: Q}
+impl<'r, P, Q> Parser<'r> for Then<P, Q> 
+    where P: for<'p> Parser<'p>, 
+          Q: for<'q> Parser<'q, X = <P as Parser<'q>>::X>,
+          <P as Parser<'r>>::X: Extra<(&'r <P as Parser<'r>>::O, &'r <Q as Parser<'r>>::O), Either<&'r <P as Parser<'r>>::E, &'r <Q as Parser<'r>>::E>> 
+{
+    type O = (&'r <P as Parser<'r>>::O, &'r <Q as Parser<'r>>::O);
+    type E = Either<&'r <P as Parser<'r>>::E, &'r <Q as Parser<'r>>::E>;
+    type X = <P as Parser<'r>>::X;
+    fn parse(&self, input: &str, progress: usize, extra: &'r Self::X) -> Result<(usize, &'r Self::O), (usize, &'r Self::E)> {
+        let (progress, lhs) = match Parser::<'r>::parse(&self.lhs, input, progress, extra) {
+            Ok((progress, lhs)) => (progress, lhs),
+            Err((progress, err)) => return Err((progress, extra.err(Either::L(err))))
+        };
+        let (progress, rhs) = match Parser::<'r>::parse(&self.rhs, input, progress, extra) {
+            Ok((progress, rhs)) => (progress, rhs),
+            Err((progress, err)) => return Err((progress, extra.err(Either::R(err))))
+        };
+        Ok((progress, extra.out((lhs, rhs))))
     }
 }
-pub fn recursive<P: Parser>(f: impl FnOnce(&Memorized<Recursive<P>>) -> P) -> Memorized<Recursive<P>> {
-    let this = Memorized::new(Recursive(OnceCell::new()));
-    this.0.0.set(f(&this)).unwrap_or_else(|_| unreachable!());
+
+#[derive(Debug, Clone, Copy)]
+pub struct Else<P, Q>
+    where P: for<'p> Parser<'p>, 
+          Q: for<'q> Parser<'q, X = <P as Parser<'q>>::X>
+{lhs: P, rhs: Q}
+impl<'r, P, Q> Parser<'r> for Else<P, Q> 
+    where P: for<'p> Parser<'p>, 
+          Q: for<'q> Parser<'q, X = <P as Parser<'q>>::X>,
+          <P as Parser<'r>>::X: Extra<Either<&'r <P as Parser<'r>>::O, &'r <Q as Parser<'r>>::O>, (&'r <P as Parser<'r>>::E, &'r <Q as Parser<'r>>::E)> 
+{
+    type E = (&'r <P as Parser<'r>>::E, &'r <Q as Parser<'r>>::E);
+    type O = Either<&'r <P as Parser<'r>>::O, &'r <Q as Parser<'r>>::O>;
+    type X = <P as Parser<'r>>::X;
+    fn parse(&self, input: &str, progress: usize, extra: &'r Self::X) -> Result<(usize, &'r Self::O), (usize, &'r Self::E)> {
+        let (progress, lhs) = match Parser::<'r>::parse(&self.lhs, input, progress, extra) {
+            Err((progress, lhs)) => (progress, lhs),
+            Ok((progress, out)) => return Ok((progress, extra.out(Either::L(out))))
+        };
+        let (progress, rhs) = match Parser::<'r>::parse(&self.rhs, input, progress, extra) {
+            Err((progress, rhs)) => (progress, rhs),
+            Ok((progress, out)) => return Ok((progress, extra.out(Either::R(out))))
+        };
+        Err((progress, extra.err((lhs, rhs))))
+    }
+}
+
+pub struct Recursive<O, E, X>(Arc<OnceCell<Box<dyn for<'a, 'r> Fn(&'a str, usize, &'r X) -> Result<(usize, &'r O), (usize, &'r E)>>>>);
+impl<'r, O: 'r, E: 'r, X> Parser<'r> for Recursive<O, E, X> 
+    where X: Extra<O, E>
+{
+    type E = E;
+    type O = O;
+    type X = X;
+    fn parse(&self, input: &str, progress: usize, extra: &'r Self::X) -> Result<(usize, &'r Self::O), (usize, &'r Self::E)> {
+        (self.0.as_ref().get().unwrap())(input, progress, extra)
+    }
+}
+pub fn recurse<O, E, X, P: for<'a> Parser<'a, E=E, O=O, X=X> + 'static>(builder: impl FnOnce(Recursive<O, E, X>) -> P) -> Recursive<O, E, X> {
+    let this = Recursive(Arc::new(OnceCell::new()));
+    let that = builder(this.clone());
+    this.0.as_ref().set(Box::new(move |input, progress, extra| that.parse(input, progress, extra)));
     return this;
 }
-
-#[derive(Debug, Clone, Copy)]
-pub enum Either<A, B> { A(A), B(B) }
-
-#[derive(Debug, Clone, Copy)]
-pub struct Concat<P, Q>(P, Q)
-where P: Parser, 
-      Q: for<'a> Parser<X<'a> = P::X<'a>>;
-impl<P, Q> Parser for Concat<P, Q>
-where P: Parser, 
-    Q: for<'a> Parser<X<'a> = P::X<'a>>,
-    for<'a> P::X<'a>: Extra<'a, (P::O<'a>, Q::O<'a>), Either<P::E<'a>, Q::E<'a>>>
-{
-    type E<'a> = Either<P::E<'a>, Q::E<'a>>;
-    type O<'a> = (P::O<'a>, Q::O<'a>);
-    type X<'a> = P::X<'a>;
-    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
-        let start = progress;
-        let (progress, a) = match self.0.parse(input, progress, extra.clone()) {
-            Ok(e) => e,
-            Err((_, output)) => return Err((start, Either::A(output)))
-        };
-        let (progress, b) = match self.1.parse(input, progress, extra) {
-            Ok(e) => e,
-            Err((_, output)) => return Err((start, Either::B(output)))
-        };
-        Ok((progress, (a, b)))
+impl<'a, O, E, X> Debug for Recursive<O, E, X> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Recursive(inner: {:?})", &self.0 as *const _)
     }
 }
-impl<P, Q> Add<Memorized<Q>> for Memorized<P>
-where P: Parser, 
-      Q: for<'a> Parser<X<'a> = P::X<'a>>,
-      for<'a> P::X<'a>: Extra<'a, (P::O<'a>, Q::O<'a>), Either<P::E<'a>, Q::E<'a>>>
-{
-    type Output = Memorized<Concat<Memorized<P>, Memorized<Q>>>;
-    fn add(self, rhs: Memorized<Q>) -> Memorized<Concat<Memorized<P>, Memorized<Q>>> {
-        Memorized::new(Concat(self, rhs))
+impl<O, E, X> Clone for Recursive<O, E, X> {
+    fn clone(&self) -> Self {
+        Recursive(Arc::clone(&self.0))
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Choice<P, Q>(P, Q)
-where P: Parser, 
-      Q: for<'a> Parser<X<'a> = P::X<'a>>,
-      for<'a> P::X<'a>: Extra<'a, Either<P::O<'a>, Q::O<'a>>, (P::E<'a>, Q::E<'a>)>;
-impl<P, Q> Parser for Choice<P, Q> 
-where P: Parser, 
-      Q: for<'a> Parser<X<'a> = P::X<'a>>,
-      for<'a> P::X<'a>: Extra<'a, Either<P::O<'a>, Q::O<'a>>, (P::E<'a>, Q::E<'a>)>
+#[derive(Clone, Debug, Copy)]
+pub struct MapOut<P: for<'p> Parser<'p>, Z>(P, for<'a> fn(&'a <P as Parser<'a>>::X, &'a <P as Parser<'a>>::O) -> &'a Z);
+impl<'q, P: for<'p> Parser<'p>, Z: 'q> Parser<'q> for MapOut<P, Z> 
+    where <P as Parser<'q>>::X: Extra<Z, <P as Parser<'q>>::E>
 {
-    type E<'a> = (P::E<'a>, Q::E<'a>);
-    type O<'a> = Either<P::O<'a>, Q::O<'a>>;
-    type X<'a> = P::X<'a>;
-    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
-        let (_, a) = match self.0.parse(input, progress, extra.clone()) {
-            Err(e) => e,
-            Ok((progress, output)) => return Ok((progress, Either::A(output)))
-        };
-        let (_, b) = match self.1.parse(input, progress, extra) {
-            Err(e) => e,
-            Ok((progress, output)) => return Ok((progress, Either::B(output)))
-        };
-        Err((progress, (a, b)))
-    }
-}
-impl<P, Q> BitOr<Memorized<Q>> for Memorized<P>
-where P: Parser, 
-      Q: for<'a> Parser<X<'a> = P::X<'a>>,
-      for<'a> P::X<'a>: Extra<'a, Either<P::O<'a>, Q::O<'a>>, (P::E<'a>, Q::E<'a>)>
-{
-    type Output = Memorized<Choice<Memorized<P>, Memorized<Q>>>;
-    fn bitor(self, rhs: Memorized<Q>) -> Self::Output {
-        Memorized::new(Choice(self, rhs))
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Lookahead<P>(P);
-impl<P: Parser> Parser for Lookahead<P> 
-where for<'a> P::X<'a>: Extra<'a, (), P::E<'a>>
-{
-    type O<'a> = ();
-    type E<'a> = P::E<'a>;
-    type X<'a> = P::X<'a>;
-    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+    type E = <P as Parser<'q>>::E;
+    type O = Z;
+    type X = <P as Parser<'q>>::X;
+    fn parse(&self, input: &str, progress: usize, extra: &'q Self::X) -> Result<(usize, &'q Self::O), (usize, &'q Self::E)> {
         match self.0.parse(input, progress, extra) {
-            Ok(_) => Ok((progress, ())),
+            Ok((progress, out)) => Ok((progress, self.1(extra, out))),
             Err(e) => Err(e),
         }
     }
 }
 
-pub struct Map<P: Parser, M: for<'a> Mapper<X<'a>=P::X<'a>, I<'a>=P::O<'a>>>(P, PhantomData<M>);
-pub trait Mapper {
-    type X<'a>;
-    type I<'a>;
-    type O<'a>: Clone;
-    fn map<'a>(_: Self::X<'a>, _: Self::I<'a>) -> Self::O<'a>;
-}
-impl<P: Parser, M: for<'a> Mapper<X<'a>=P::X<'a>, I<'a>=P::O<'a>>> Parser for Map<P, M> 
-    where for<'a> P::X<'a>: Extra<'a, M::O<'a>, P::E<'a>>
+#[derive(Clone, Debug, Copy)]
+pub struct MapErr<P: for<'p> Parser<'p>, Z>(P, for<'a> fn(&'a <P as Parser<'a>>::X, &'a <P as Parser<'a>>::E) -> &'a Z);
+impl<'q, P: for<'p> Parser<'p>, Z: 'q> Parser<'q> for MapErr<P, Z> 
+    where <P as Parser<'q>>::X: Extra<<P as Parser<'q>>::O, Z>
 {
-    type O<'a> = M::O<'a>;
-    type E<'a> = P::E<'a>;
-    type X<'a> = P::X<'a>;
-    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
-        match self.0.parse(input, progress, extra.clone()) {
-            Err(e) => Err(e),
-            Ok((progress, output)) => Ok((progress, M::map(extra, output)))
-        }
-    }
-}
-
-pub struct MapErr<P: Parser, M: for<'a> Mapper<X<'a>=P::X<'a>, I<'a>=P::E<'a>>>(P, PhantomData<M>);
-impl<P: Parser, M: for<'a> Mapper<X<'a>=P::X<'a>, I<'a>=P::E<'a>>> Parser for MapErr<P, M> 
-    where for<'a> P::X<'a>: Extra<'a, P::O<'a>, M::O<'a>>
-{
-    type O<'a> = P::O<'a>;
-    type E<'a> = M::O<'a>;
-    type X<'a> = P::X<'a>;
-    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
-        match self.0.parse(input, progress, extra.clone()) {
+    type E = Z;
+    type O = <P as Parser<'q>>::O;
+    type X = <P as Parser<'q>>::X;
+    fn parse(&self, input: &str, progress: usize, extra: &'q Self::X) -> Result<(usize, &'q Self::O), (usize, &'q Self::E)> {
+        match self.0.parse(input, progress, extra) {
+            Err((progress, out)) => Err((progress, self.1(extra, out))),
             Ok(e) => Ok(e),
-            Err((progress, err)) => Err((progress, M::map(extra, err)))
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use bumpalo::Bump;
     use super::*;
-    use thiserror::*;
+    use bumpalo::Bump;
 
-    impl<'a, O, E> Extra<'a, O, E> for &'a Bump {}
-    #[derive(Debug, Clone, Copy, Error)]
-    pub enum Err {
-        #[error("not a number")]
-        NotNumber,
-        #[error("expect {0}, found {1:?}")]
-        Expect(char, Option<char>),
-    }
-
-    pub struct Number;
-    impl Parser for Number {
-        type O<'a> = i64;
-        type E<'a> = Err;
-        type X<'a> = &'a Bump;
-        fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
-            let len = input.len() - progress - input[progress..].trim_start_matches(|c: char| char::is_numeric(c)).len();
-            if len == 0 { Err((progress, Err::NotNumber))? }
-            let num = &input[..len].parse().unwrap();
-            return Ok((progress + len, *num))
+    impl<O, E> Extra<O, E> for Bump {
+        fn err(&self, e: E) -> &E {
+            self.alloc(e)
+        }
+        fn out(&self, o: O) -> &O {
+            self.alloc(o)   
         }
     }
 
-    pub struct Punct(char);
-    impl Parser for Punct {
-        type O<'a> = char;
-        type E<'a> = Err;
-        type X<'a> = &'a Bump;
-        fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+    pub struct Token(&'static str);
+    pub struct NotMatch(&'static str);
+    impl<'a> Parser<'a> for Token {
+        type E = NotMatch;
+        type O = &'static str;
+        type X = Bump;
+        fn parse(&self, input: &str, progress:usize, extra: &'a Self::X) -> Result<(usize, &'a Self::O),(usize, &'a Self::E)> {
             if input[progress..].starts_with(self.0) {
-                Ok((progress + input[progress..].len() - input[progress..].strip_prefix(self.0).unwrap().len(), self.0))
+                Ok((progress + self.0.len(), extra.alloc(self.0)))
             }
             else {
-                Err((progress, Err::Expect(self.0, input[progress..].chars().next())))
+                Err((progress, extra.alloc(NotMatch(self.0))))
             }
         }
     }
 
     #[test]
-    fn arithmetic() {
+    fn arithemetic() {
         let bump = Bump::new();
-        let num = || Memorized::new(Number);
-        let pun = || Memorized::new(Punct('+'));
-        let add = recursive(|rec| {
-            let rec = || rec.clone();
-            (num() + pun() + rec()) | num()
+        let a = || Token("a");
+        let b = || Token("b");
+        fn take_left<A, B, C>(_: C, (a, b): (A, B)) -> A { a }
+        fn unwrap<A, B, C>(_: C, a: Either<A, B>) -> () { () }
+        let parser = recurse::<usize, (), Bump, _>(|this| {
+            MapOut(MapErr(Else { lhs: Then { lhs: a(), rhs: this }, rhs: b() }, |extra, _| extra.alloc(())), |extra, _| extra.alloc(0usize))
         });
-        println!("{:?}", add.parse("1+1", 0, &bump));
+        let example = "aaabb";
+        println!("{:?}", parser.parse(&example, 0, &bump));
     }
-
 }
