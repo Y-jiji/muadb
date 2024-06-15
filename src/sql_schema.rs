@@ -28,7 +28,7 @@ pub fn sql_parser_schema<'a>() -> SQLTag<'a, SQLRec<'a>> {
         let tuple = Token::new("(") % (tuple / Token::new(")"));
         let tuple = tuple.out(|extra, tuple| extra.bump.alloc(SQLSchema::Tuple { tuple }));
         let i64 = Token::new("i64").out(|extra: &'a SQLSpace<'a>, _| extra.bump.alloc(SQLSchema::I64));
-        return (tuple ^ i64).err(|extra, _| extra.bump.alloc(SQLError::Unknown));
+        return (Pad::new()%(tuple ^ i64)/Pad::new()).err(|extra, _| extra.bump.alloc(SQLError::Unknown));
     })
 }
 
@@ -39,13 +39,10 @@ mod test {
 
     #[test]
     fn parse_tuple() {
-        let input = "(i64, i64, i64)";
+        let input = "( i64 , )";
         let bump = Bump::new();
-        fn parse<'a>(bump: &'a Bump, input: &str) {
-            let parser = sql_parser_schema();
-            let space = SQLSpace::new(&bump, input);
-            parser.parse(input, 0, space);
-        }
+        let space = SQLSpace::new(&bump, input);
+        let parser = sql_parser_schema();
+        println!("{:?}", parser.parse(input, 0, &space));
     }
-
 }

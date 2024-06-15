@@ -192,14 +192,14 @@ impl<'p, OP, EP, OQ, EQ, X, P, Q> Parser<'p, Either<&'p OP, &'p OQ>, (&'p EP, &'
     fn parse(&self, input: &str, progress: usize, extra: &'p X) -> Result<(usize, &'p Either<&'p OP, &'p OQ>), (usize, &'p (&'p EP, &'p EQ))> {
         let start = progress;
         let (progress, lhs) = match Parser::<'p>::parse(&self.lhs, input, progress, extra) {
-            Err((progress, lhs)) => (progress, lhs),
-            Ok((progress, err)) => return Ok((start, extra.out(Either::L(err))))
+            Err((progress, lhs)) => (start, lhs),
+            Ok((progress, err)) => return Ok((progress, extra.out(Either::L(err))))
         };
         let (progress, rhs) = match Parser::<'p>::parse(&self.rhs, input, progress, extra) {
-            Err((progress, rhs)) => (progress, rhs),
-            Ok((progress, err)) => return Ok((start, extra.out(Either::R(err))))
+            Err((progress, rhs)) => (start, rhs),
+            Ok((progress, err)) => return Ok((progress, extra.out(Either::R(err))))
         };
-        Err((progress, extra.err((lhs, rhs))))
+        Err((start, extra.err((lhs, rhs))))
     }
 }
 impl<'p, OP, EP, OQ, EQ, X, P, Q> BitOr<Tag<'p, OQ, EQ, X, Q>> for Tag<'p, OP, EP, X, P>
@@ -402,9 +402,11 @@ impl<'a, X> Parser<'a, (), (), X> for Token<X>
 {
     fn parse(&self, input: &str, progress: usize, extra: &'a X) -> Result<(usize, &'a ()), (usize, &'a ())> {
         if input[progress..].starts_with(self.token) {
+            log::debug!("TOKEN={:?} MATCHED", self.token);
             Ok((progress + self.token.len(), extra.out(())))
         }
         else {
+            log::debug!("TOKEN={:?} SEEN={:?}", self.token, &input[progress..(progress+self.token.len()).min(input.len())]);
             Err((progress, extra.err(())))
         }
     }
@@ -432,6 +434,7 @@ impl<'a, X> Parser<'a, (), (), X> for Pad<X>
             break;
         }
         if last { cut = input[progress..].len() }
+        log::debug!("EAT SPACE={cut}");
         Ok((progress + cut, extra.out(())))
     }
 }
@@ -453,19 +456,18 @@ mod test {
     #[test]
     fn alphabet() {
         let bump = Bump::new();
-        // let a = || Token::new("a");
-        // let b = || Token::new("b");
-        // fn take_left<A, B, C>(_: C, (a, b): (A, B)) -> A { a }
-        // fn unwrap<A, B, C>(_: C, a: Either<A, B>) -> () { () }
-        // let parser = recurse::<i64, (), Bump, _>(|this| {
-        //     (a() + this.clone()).out(|extra, (lhs, rhs)| {
-        //         extra.alloc(**rhs + 20)
-        //     }) 
-        //     ^ (b().out(|extra: &Bump, _| extra.alloc(1)))
-        // }.err(|extra, _| extra.alloc(())));
-        // let parser = a() + b();
+        let a = || Token::new("a");
+        let b = || Token::new("b");
+        fn take_left<A, B, C>(_: C, (a, b): (A, B)) -> A { a }
+        fn unwrap<A, B, C>(_: C, a: Either<A, B>) -> () { () }
+        let parser = recurse::<i64, (), Bump, _>(|this| {
+            (a() + this.clone()).out(|extra, (lhs, rhs)| {
+                extra.alloc(**rhs + 20)
+            }) 
+            ^ (b().out(|extra: &Bump, _| extra.alloc(1)))
+        }.err(|extra, _| extra.alloc(())));
         let example = "aaabb";
-        // let this = parser.parse(&example, 0, &bump);
-        // assert!(&61i64 == this.unwrap().1);
+        let this = parser.parse(&example, 0, &bump);
+        assert!(&61 == this.unwrap().1);
     }
 }
