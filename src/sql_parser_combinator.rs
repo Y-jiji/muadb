@@ -2,6 +2,7 @@ use std::{any::Any, cell::OnceCell, fmt::Debug, marker::PhantomData, ops::{Add, 
 
 #[allow(unused)]
 pub trait Extra<O, E> {
+    fn mark(&self, progress: usize, tag: u64) {}
     fn record(&self, progress: usize, tag: u64, result: Result<(usize, &O), (usize, &E)>)   {  }
     fn replay(&self, progress: usize, tag: u64) -> Option<Result<(usize, &O), (usize, &E)>> { None }
     fn out(&self, o: O) -> &O;
@@ -15,6 +16,7 @@ pub trait Parser<'p>: Sized {
     type X: Extra<Self::O, Self::E>;
     fn parse(&self, input: &str, progress: usize, extra: &'p Self::X) -> Result<(usize, &'p Self::O), (usize, &'p Self::E)>;
     fn tag(&self) -> u64 { 0 }
+    fn is_recursive(&self) -> bool { false }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -27,6 +29,7 @@ impl<'q, P: for<'p> Parser<'p>> Parser<'q> for Memorized<P> {
         if let Some(result) = extra.replay(progress, self.tag) {
             return result;
         }
+        if self.is_recursive() { extra.mark(progress, self.tag); }
         let result = self.inner.parse(input, progress, extra);
         extra.record(progress, self.tag, result.clone());
         return result;
@@ -37,7 +40,8 @@ impl<'q, P: for<'p> Parser<'p>> Memorized<P> {
     pub fn new(inner: P) -> Self {
         static COUNT: AtomicU64 = AtomicU64::new(1);
         use std::sync::atomic::Ordering::SeqCst;
-        let tag = if inner.tag() != 0 { inner.tag() } else { COUNT.fetch_add(1, SeqCst) };
+        if inner.tag() != 0 { panic!("already memorized!") }
+        let tag = COUNT.fetch_add(1, SeqCst);
         Memorized{inner, tag}
     }
 }
@@ -79,13 +83,14 @@ impl<'r, P, Q> Parser<'r> for Then<P, Q>
     type E = Either<&'r <P as Parser<'r>>::E, &'r <Q as Parser<'r>>::E>;
     type X = <P as Parser<'r>>::X;
     fn parse(&self, input: &str, progress: usize, extra: &'r Self::X) -> Result<(usize, &'r Self::O), (usize, &'r Self::E)> {
+        let start = progress;
         let (progress, lhs) = match Parser::<'r>::parse(&self.lhs, input, progress, extra) {
             Ok((progress, lhs)) => (progress, lhs),
-            Err((progress, err)) => return Err((progress, extra.err(Either::L(err))))
+            Err((progress, err)) => return Err((start, extra.err(Either::L(err))))
         };
         let (progress, rhs) = match Parser::<'r>::parse(&self.rhs, input, progress, extra) {
             Ok((progress, rhs)) => (progress, rhs),
-            Err((progress, err)) => return Err((progress, extra.err(Either::R(err))))
+            Err((progress, err)) => return Err((start, extra.err(Either::R(err))))
         };
         Ok((progress, extra.out((lhs, rhs))))
     }
@@ -105,12 +110,13 @@ impl<'r, P, Q> Parser<'r> for Else<P, Q>
     type O = Either<&'r <P as Parser<'r>>::O, &'r <Q as Parser<'r>>::O>;
     type X = <P as Parser<'r>>::X;
     fn parse(&self, input: &str, progress: usize, extra: &'r Self::X) -> Result<(usize, &'r Self::O), (usize, &'r Self::E)> {
+        let start = progress;
         let (progress, lhs) = match Parser::<'r>::parse(&self.lhs, input, progress, extra) {
-            Err((progress, lhs)) => (progress, lhs),
+            Err((progress, lhs)) => (start, lhs),
             Ok((progress, out)) => return Ok((progress, extra.out(Either::L(out))))
         };
         let (progress, rhs) = match Parser::<'r>::parse(&self.rhs, input, progress, extra) {
-            Err((progress, rhs)) => (progress, rhs),
+            Err((progress, rhs)) => (start, rhs),
             Ok((progress, out)) => return Ok((progress, extra.out(Either::R(out))))
         };
         Err((progress, extra.err((lhs, rhs))))
@@ -127,6 +133,7 @@ impl<'r, O: 'r, E: 'r, X> Parser<'r> for Recursive<O, E, X>
     fn parse(&self, input: &str, progress: usize, extra: &'r Self::X) -> Result<(usize, &'r Self::O), (usize, &'r Self::E)> {
         (self.0.as_ref().get().unwrap())(input, progress, extra)
     }
+    fn is_recursive(&self) -> bool { true }
 }
 pub fn recurse<O, E, X, P: for<'a> Parser<'a, E=E, O=O, X=X> + 'static>(builder: impl FnOnce(Recursive<O, E, X>) -> P) -> Recursive<O, E, X> {
     let this = Recursive(Arc::new(OnceCell::new()));
