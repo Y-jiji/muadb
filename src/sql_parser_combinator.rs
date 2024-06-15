@@ -11,11 +11,11 @@ pub type PResult<'a, P: Parser> = Result<(usize, P::O<'a>), (usize, P::E<'a>)>;
 static COUNT: AtomicU64 = AtomicU64::new(1);
 
 #[auto_impl::auto_impl(Box, &)]
-pub trait Parser<'a, 'b>: Sized {
-    type O: Clone + 'a;
-    type E: Clone + 'a;
-    type X: Extra<'a, Self::O, Self::E> + Clone;
-    fn parse(&self, input: &'b str, progress: usize, extra: Self::X) -> PResult<'a, Self>;
+pub trait Parser: Sized {
+    type O<'a>: Clone;
+    type E<'a>: Clone;
+    type X<'a>: Extra<'a, Self::O<'a>, Self::E<'a>> + Clone;
+    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -24,7 +24,7 @@ impl<P: Parser> Parser for Memorized<P> {
     type O<'a> = P::O<'a>;
     type E<'a> = P::E<'a>;
     type X<'a> = P::X<'a>;
-    fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
         if let Some(result) = extra.clone().replay(progress, self.1) {
             return result;
         }
@@ -45,7 +45,7 @@ impl<P: Parser> Parser for Recursive<P> {
     type O<'a> = P::O<'a>;
     type E<'a> = P::E<'a>;
     type X<'a> = P::X<'a>;
-    fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
         self.0.get().unwrap().parse(input, progress, extra)
     }
 }
@@ -70,7 +70,7 @@ where P: Parser,
     type E<'a> = Either<P::E<'a>, Q::E<'a>>;
     type O<'a> = (P::O<'a>, Q::O<'a>);
     type X<'a> = P::X<'a>;
-    fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
         let start = progress;
         let (progress, a) = match self.0.parse(input, progress, extra.clone()) {
             Ok(e) => e,
@@ -107,7 +107,7 @@ where P: Parser,
     type E<'a> = (P::E<'a>, Q::E<'a>);
     type O<'a> = Either<P::O<'a>, Q::O<'a>>;
     type X<'a> = P::X<'a>;
-    fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
         let (_, a) = match self.0.parse(input, progress, extra.clone()) {
             Err(e) => e,
             Ok((progress, output)) => return Ok((progress, Either::A(output)))
@@ -138,7 +138,7 @@ where for<'a> P::X<'a>: Extra<'a, (), P::E<'a>>
     type O<'a> = ();
     type E<'a> = P::E<'a>;
     type X<'a> = P::X<'a>;
-    fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
         match self.0.parse(input, progress, extra) {
             Ok(_) => Ok((progress, ())),
             Err(e) => Err(e),
@@ -146,35 +146,41 @@ where for<'a> P::X<'a>: Extra<'a, (), P::E<'a>>
     }
 }
 
-pub struct Map<'a, P: Parser, Z: Clone + 'a>(P, fn(P::X<'a>, P::O<'a>) -> Z);
-impl<'a, P: Parser, Z: Clone + 'a> Parser for Map<'a, P, Z> 
-    where for<'b> P::X<'a>: Extra<'a, Z, P::E<'a>>
+pub struct Map<P: Parser, M: for<'a> Mapper<X<'a>=P::X<'a>, I<'a>=P::O<'a>>>(P, PhantomData<M>);
+pub trait Mapper {
+    type X<'a>;
+    type I<'a>;
+    type O<'a>: Clone;
+    fn map<'a>(_: Self::X<'a>, _: Self::I<'a>) -> Self::O<'a>;
+}
+impl<P: Parser, M: for<'a> Mapper<X<'a>=P::X<'a>, I<'a>=P::O<'a>>> Parser for Map<P, M> 
+    where for<'a> P::X<'a>: Extra<'a, M::O<'a>, P::E<'a>>
 {
-    type O<'a> = &'a Z;
+    type O<'a> = M::O<'a>;
     type E<'a> = P::E<'a>;
     type X<'a> = P::X<'a>;
-    fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
         match self.0.parse(input, progress, extra.clone()) {
             Err(e) => Err(e),
-            Ok((progress, output)) => Ok((progress, (self.1)(&(), extra, output)))
+            Ok((progress, output)) => Ok((progress, M::map(extra, output)))
         }
     }
 }
 
-// pub struct MapErr<P: Parser, Z: Clone + 'static>(P, for<'a> fn(P::X<'a>, P::E<'a>) -> &'a Z);
-// impl<P: Parser, Z: Clone + 'static> Parser for MapErr<P, Z> 
-//     where for<'a> P::X<'a>: Extra<'a, P::O<'a>, &'a Z>
-// {
-//     type O<'a> = P::O<'a>;
-//     type E<'a> = &'a Z;
-//     type X<'a> = P::X<'a>;
-//     fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
-//         match self.0.parse(input, progress, extra.clone()) {
-//             Ok(e) => Ok(e),
-//             Err((progress, output)) => Err((progress, (self.1)(&(), extra, output)))
-//         }
-//     }
-// }
+pub struct MapErr<P: Parser, M: for<'a> Mapper<X<'a>=P::X<'a>, I<'a>=P::E<'a>>>(P, PhantomData<M>);
+impl<P: Parser, M: for<'a> Mapper<X<'a>=P::X<'a>, I<'a>=P::E<'a>>> Parser for MapErr<P, M> 
+    where for<'a> P::X<'a>: Extra<'a, P::O<'a>, M::O<'a>>
+{
+    type O<'a> = P::O<'a>;
+    type E<'a> = M::O<'a>;
+    type X<'a> = P::X<'a>;
+    fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+        match self.0.parse(input, progress, extra.clone()) {
+            Ok(e) => Ok(e),
+            Err((progress, err)) => Err((progress, M::map(extra, err)))
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -196,7 +202,7 @@ mod test {
         type O<'a> = i64;
         type E<'a> = Err;
         type X<'a> = &'a Bump;
-        fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+        fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
             let len = input.len() - progress - input[progress..].trim_start_matches(|c: char| char::is_numeric(c)).len();
             if len == 0 { Err((progress, Err::NotNumber))? }
             let num = &input[..len].parse().unwrap();
@@ -209,7 +215,7 @@ mod test {
         type O<'a> = char;
         type E<'a> = Err;
         type X<'a> = &'a Bump;
-        fn parse<'a, 'b>(&self, input: &'b str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
+        fn parse<'a>(&self, input: &str, progress: usize, extra: Self::X<'a>) -> PResult<'a, Self> {
             if input[progress..].starts_with(self.0) {
                 Ok((progress + input[progress..].len() - input[progress..].strip_prefix(self.0).unwrap().len(), self.0))
             }
