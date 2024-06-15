@@ -10,11 +10,11 @@ use crate::{
 /// Generic Scalar Buffer
 pub struct SBuf {
     pub buffer: Bytes,
-    pub schema: Schema,
+    pub schema: DSchema,
 }
 
 impl SBuf {
-    pub fn new(schema: Schema) -> Self {
+    pub fn new(schema: DSchema) -> Self {
         macro_rules! Match {($($X: ident,)*) => {{
             let schema_ref = schema.as_ref();
             match Tag::from(schema_ref.tag()) {
@@ -30,7 +30,7 @@ impl SBuf {
 /// Immutable Reference of Generic Scalar Buffer
 pub struct SBufRef<'a> {
     pub buffer: &'a [u8],
-    pub schema: SchemaRef<'a>,
+    pub schema: DSchemaRef<'a>,
 }
 
 /// 
@@ -46,11 +46,11 @@ pub trait SBufParser<const TAG: u8> {
 /// Generic Vector Buffer
 pub struct VBuf {
     pub buffer: Vec<Bytes>,
-    pub schema: Schema,
+    pub schema: DSchema,
 }
 
 impl VBuf {
-    pub fn new(schema: Schema) -> VBuf {
+    pub fn new(schema: DSchema) -> VBuf {
         macro_rules! Match {($($X: ident,)*) => {{
             let schema_ref = schema.as_ref();
             match Tag::from(schema_ref.tag()) {
@@ -66,14 +66,14 @@ impl VBuf {
 /// Mutable Reference of Generic Vector Buffer
 pub struct VBufMut<'a> {
     pub buffer: &'a mut [Bytes],
-    pub schema: SchemaRef<'a>,
+    pub schema: DSchemaRef<'a>,
 }
 
 /// Immutable Reference of Generic Vector Buffer
 #[derive(Clone, Copy)]
 pub struct VBufRef<'a> {
     pub buffer: &'a [Bytes],
-    pub schema: SchemaRef<'a>,
+    pub schema: DSchemaRef<'a>,
 }
 
 pub trait BufferParser<const TAG: u8> {

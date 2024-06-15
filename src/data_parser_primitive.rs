@@ -7,26 +7,26 @@ use crate::data_buffer::*;
 
 macro_rules! ImplPrimitiveDataParser {($($X: ident: $Y: ty, )*) => {$(
     impl Primitive for $X {}
-    impl SchemaParser<{Tag::$X as u8}> for $X {
+    impl DSchemaParser<{Tag::$X as u8}> for $X {
         #[inline(always)]
-        fn decode<'a>(_: SchemaRef<'a>) -> SchemaEnum<'a> {
-            SchemaEnum::$X
+        fn decode<'a>(_: DSchemaRef<'a>) -> DSchemaEnum<'a> {
+            DSchemaEnum::$X
         }
-        fn encode<'a>(children: &[SchemaRef<'a>]) -> Schema {
+        fn encode<'a>(children: &[DSchemaRef<'a>]) -> DSchema {
             assert!(children.len() == 0);
-            return Schema::from_primitive::<$X>();
+            return DSchema::from_primitive::<$X>();
         }
-        fn scalar_layout<'a>(_: SchemaRef<'a>) -> ScalarLayout {
+        fn scalar_layout<'a>(_: DSchemaRef<'a>) -> ScalarLayout {
             let m = std::alloc::Layout::new::<$Y>();
             ScalarLayout {
                 size: m.size(),
                 align: m.align()
             }
         }
-        fn dbg(_: SchemaRef<'_>, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn dbg(_: DSchemaRef<'_>, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(fmt, "{:?}", Tag::$X)
         }
-        fn num_columns<'a>(_: SchemaRef<'a>) -> usize {
+        fn num_columns<'a>(_: DSchemaRef<'a>) -> usize {
             1
         }
     }
@@ -53,22 +53,22 @@ ImplPrimitiveDataParser! {
 /*                                   */
 
 impl Primitive for Nil {}
-impl SchemaParser<{Tag::Nil as u8}> for Nil {
+impl DSchemaParser<{Tag::Nil as u8}> for Nil {
     #[inline(always)]
-    fn decode<'a>(schema: SchemaRef<'a>) -> SchemaEnum<'a> {
-        SchemaEnum::Nil
+    fn decode<'a>(schema: DSchemaRef<'a>) -> DSchemaEnum<'a> {
+        DSchemaEnum::Nil
     }
-    fn encode<'a>(children: &[SchemaRef<'a>]) -> Schema {
+    fn encode<'a>(children: &[DSchemaRef<'a>]) -> DSchema {
         assert!(children.len() == 0);
-        return Schema::from_primitive::<Nil>()
+        return DSchema::from_primitive::<Nil>()
     }
-    fn scalar_layout<'a>(schema: SchemaRef) -> ScalarLayout {
+    fn scalar_layout<'a>(schema: DSchemaRef) -> ScalarLayout {
         ScalarLayout{size: 0, align: 0}
     }
-    fn dbg(_: SchemaRef<'_>, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn dbg(_: DSchemaRef<'_>, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(fmt, "{:?}", Tag::Nil)
     }
-    fn num_columns<'a>(schema: SchemaRef) -> usize {
+    fn num_columns<'a>(schema: DSchemaRef) -> usize {
         1
     }
 }
@@ -94,20 +94,20 @@ impl BufferParser<{Tag::Pad as u8}> for Pad {
     type VectorRef<'a> = FlatNilRef;
 }
 
-impl SchemaParser<{Tag::Pad as u8}> for Pad {
-    fn decode<'a>(schema: SchemaRef<'a>) -> SchemaEnum<'a> {
+impl DSchemaParser<{Tag::Pad as u8}> for Pad {
+    fn decode<'a>(schema: DSchemaRef<'a>) -> DSchemaEnum<'a> {
         schema.decode()
     }
-    fn encode<'a>(children: &[SchemaRef<'a>]) -> Schema {
+    fn encode<'a>(children: &[DSchemaRef<'a>]) -> DSchema {
         panic!("you should never construct a schema with type 'pad'");
     }
-    fn scalar_layout<'a>(schema: SchemaRef<'a>) -> ScalarLayout {
+    fn scalar_layout<'a>(schema: DSchemaRef<'a>) -> ScalarLayout {
         panic!("you should never construct a schema with type 'pad', so there function will never be called");
     }
-    fn dbg(_: SchemaRef<'_>, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn dbg(_: DSchemaRef<'_>, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         panic!("you should never construct a schema with type 'pad', so there function will never be called");
     }
-    fn num_columns<'a>(schema: SchemaRef) -> usize {
+    fn num_columns<'a>(schema: DSchemaRef) -> usize {
         panic!("you should never construct a schema with type 'pad'");
     }
 }

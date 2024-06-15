@@ -2,10 +2,11 @@
 
 // standalone modules
 mod util_bytes;
+mod util_logging;
 
 // sql modules
 mod sql_parser;
-mod sql_parser_combinator;
+mod util_pratt_parser;
 mod sql_optimizer;
 mod sql_compiler;
 
@@ -29,6 +30,12 @@ mod storage_in_memory;
 // physical op modules
 mod op_collect_hashmap;
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    crate::util_logging::init();
+}
+
 fn main() {
-    println!("Hello, world!");
+    println!("hello world");
 }

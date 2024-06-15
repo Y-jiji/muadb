@@ -7,22 +7,22 @@ use crate::data_buffer::*;
 
 impl Primitive for Str {}
 
-impl SchemaParser<{Tag::Str as u8}> for Str {
-    fn decode<'a>(_: SchemaRef<'a>) -> SchemaEnum<'a> {
-        SchemaEnum::Str
+impl DSchemaParser<{Tag::Str as u8}> for Str {
+    fn decode<'a>(_: DSchemaRef<'a>) -> DSchemaEnum<'a> {
+        DSchemaEnum::Str
     }
-    fn encode<'a>(children: &[SchemaRef<'a>]) -> Schema {
+    fn encode<'a>(children: &[DSchemaRef<'a>]) -> DSchema {
         assert!(children.len() == 0);
-        return Schema::from_primitive::<Str>()
+        return DSchema::from_primitive::<Str>()
     }
-    fn scalar_layout<'a>(_: SchemaRef<'a>) -> ScalarLayout {
+    fn scalar_layout<'a>(_: DSchemaRef<'a>) -> ScalarLayout {
         let m = std::alloc::Layout::new::<&str>();
         ScalarLayout {
             size: m.size(),
             align: m.align()
         }
     }
-    fn num_columns<'a>(_: SchemaRef<'a>) -> usize {
+    fn num_columns<'a>(_: DSchemaRef<'a>) -> usize {
         2
     }
 }
