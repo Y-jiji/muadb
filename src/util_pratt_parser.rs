@@ -21,7 +21,7 @@ pub trait Extra<O, E>: Clone
 }
 
 // a general parser trait
-pub trait Parser<O, E, X>: Sized 
+pub trait Parser<O, E, X>
     where
         X: Extra<O, E> + Clone, 
         O: Clone, 

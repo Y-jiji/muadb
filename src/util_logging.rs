@@ -1,21 +1,22 @@
-use std::{collections::HashMap, sync::{atomic::AtomicBool, OnceLock}};
+use std::{collections::HashMap, io::Write, sync::{atomic::AtomicBool, Mutex, OnceLock}};
 
 use log::*;
 use Level::*;
 use colored::Colorize;
 
 static LV: LevelFilter = LevelFilter::Debug;
-static LOGGER: StaticLogger = StaticLogger;
 
-pub struct StaticLogger;
+pub struct StaticLogger(Mutex<std::io::Stderr>);
 impl Log for StaticLogger {
     fn flush(&self) {
-        println!("flush");
+        self.0.clear_poison();
+        self.0.try_lock().map(|mut lock| lock.flush().unwrap());
     }
     fn enabled(&self, metadata: &Metadata) -> bool {
         return true;
     }
     fn log(&self, record: &Record) {
+        use std::io::Write;
         if !self.enabled(record.metadata()) { return }
         let mark = match record.level() {
             Level::Debug => "{DEBUG}".bright_black(),
@@ -26,15 +27,14 @@ impl Log for StaticLogger {
         }.bold();
         let file = record.file_static().unwrap_or("");
         let n = 30-file.len();
-        println!("{mark:<8}{file}:{:<n$} {}", record.line().unwrap_or(0), record.args())
+        self.0.lock().map(|mut lock| {
+            writeln!(lock, "{mark:<8}{file}:{:<n$} {}", record.line().unwrap_or(0), record.args()).unwrap()
+        });
     }
 }
 
 pub fn init() -> Result<(), SetLoggerError> {
-    static INITIALIZED: AtomicBool = AtomicBool::new(false);
-    if INITIALIZED.fetch_or(true, std::sync::atomic::Ordering::SeqCst) {
-        return Ok(())
-    }
-    log::set_logger(&StaticLogger)
+    static STATICLOGGER: OnceLock<StaticLogger> = OnceLock::new();
+    log::set_logger(STATICLOGGER.get_or_init(|| StaticLogger(Mutex::new(std::io::stderr()))))
         .map(|()| log::set_max_level(LV.into()))
 }
