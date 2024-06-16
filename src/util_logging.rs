@@ -9,8 +9,12 @@ static LV: LevelFilter = LevelFilter::Debug;
 pub struct StaticLogger(Mutex<std::io::Stderr>);
 impl Log for StaticLogger {
     fn flush(&self) {
-        self.0.clear_poison();
-        self.0.try_lock().map(|mut lock| lock.flush().unwrap());
+        loop {
+            self.0.clear_poison();
+            if let Ok(_) = self.0.try_lock().map(|mut lock| {
+                lock.flush()
+            }) { break }
+        }
     }
     fn enabled(&self, metadata: &Metadata) -> bool {
         return true;
@@ -27,9 +31,12 @@ impl Log for StaticLogger {
         }.bold();
         let file = record.file_static().unwrap_or("");
         let n = 30-file.len();
-        self.0.lock().map(|mut lock| {
-            writeln!(lock, "{mark:<8}{file}:{:<n$} {}", record.line().unwrap_or(0), record.args()).unwrap()
-        });
+        loop {
+            self.0.clear_poison();
+            if let Ok(_) = self.0.try_lock().map(|mut lock| {
+                writeln!(lock, "{mark:<8}{file}:{:<n$} {}", record.line().unwrap_or(0), record.args()).unwrap()
+            }) { break }
+        }
     }
 }
 
