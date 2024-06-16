@@ -18,10 +18,15 @@ fn check(x: u64) -> u16 {
 }
 
 impl<'a, O: Debug + Clone, E: Debug + Clone> Extra<O, E> for SQLSpace<'a> {
-    fn mark(&self, progress: usize, tag: u64) {}
-    // Safety: allocation is managed by bumpalo (without *external heap allocation*)
-    // Therefore, transmuting &u8 <-> &Result is safe as each reference is only used as one &Result type. 
+    fn mark(&self, progress: usize, tag: u64) {
+        log::debug!("TAG={tag:<3} PROGRESS={progress:<4} MARK");
+        self.tag_slice.borrow_mut()[progress].push(check(tag));
+        self.res_slice.borrow_mut()[progress].push(None);
+    }
     fn record(&self, progress: usize, tag: u64, result: Result<(usize, O), (usize, E)>) {
+        // Safety: allocation is managed by bumpalo (without *external heap allocation*)
+        // Therefore, transmuting &u8 <-> &Result is safe as each reference is only used as one &Result type. 
+        // No lifetime change happens, so no need to worray about that. 
         log::debug!("TAG={tag:<3} PROGRESS={progress:<4} RESULT={result:?}");
         self.tag_slice.borrow_mut()[progress].push(check(tag));
         let result = unsafe { std::mem::transmute(self.bump.alloc(result)) };
@@ -29,7 +34,7 @@ impl<'a, O: Debug + Clone, E: Debug + Clone> Extra<O, E> for SQLSpace<'a> {
     }
     fn replay(&self, progress: usize, tag: u64) -> Option<Result<(usize, O), (usize, E)>> {
         log::debug!("TAG={tag:<3} PROGRESS={progress:<4} REWIND");
-        for (i, x) in self.tag_slice.borrow()[progress].iter().enumerate() {
+        for (i, x) in self.tag_slice.borrow()[progress].iter().rev().enumerate() {
             if *x != check(tag) { continue }
             let res = self.res_slice.borrow()[progress][i]?;
             let res: &Result<(usize, O), (usize, E)> = unsafe { std::mem::transmute(res) };
@@ -37,7 +42,6 @@ impl<'a, O: Debug + Clone, E: Debug + Clone> Extra<O, E> for SQLSpace<'a> {
         }
         return None
     }
-    // easy!
 }
 
 impl<'c> SQLSpace<'c> {

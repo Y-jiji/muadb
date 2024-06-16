@@ -24,7 +24,9 @@ impl Log for StaticLogger {
             Level::Warn  => "{WARN}".yellow(),
             Level::Error => "{ERROR}".red()
         }.bold();
-        println!("{mark:<10}{:>30} {:>4} {}", record.module_path().unwrap_or(""), record.line().unwrap_or(0), record.args())
+        let file = record.file_static().unwrap_or("");
+        let n = 30-file.len();
+        println!("{mark:<8}{file}:{:<n$} {}", record.line().unwrap_or(0), record.args())
     }
 }
 

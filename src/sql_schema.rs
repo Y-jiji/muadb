@@ -19,7 +19,7 @@ pub enum SQLSchema<'a> {
 type SQLTag<'a, P> = Tag<SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>, P>;
 type SQLRec<'a> = Recursive<SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>>;
 
-pub fn sql_parser_schema<'a>() -> SQLTag<'a, SQLRec<'a>> {
+pub fn sql_parser_schema<'a>() -> impl Parser<SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>> {
     recurse(|this| {
         let tuple = (this / (Pad::new() / Token::new(",") / Pad::new())) >> (
             |extra: SQLSpace<'a>| BVec::with_capacity_in(5, extra.bump),
@@ -28,7 +28,7 @@ pub fn sql_parser_schema<'a>() -> SQLTag<'a, SQLRec<'a>> {
         let tuple = Token::new("(") % (tuple / Token::new(")"));
         let tuple = tuple.out(|extra, tuple| SQLSchema::Tuple { tuple });
         let i64 = Token::new("i64").out(|extra: SQLSpace<'a>, _| SQLSchema::I64);
-        return (Pad::new()%(tuple ^ i64)/Pad::new()).err(|extra, _| SQLError::Unknown);
+        (Pad::new()%(tuple ^ i64)/Pad::new()).err(|extra, _| SQLError::Unknown)
     })
 }
 

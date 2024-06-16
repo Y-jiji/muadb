@@ -116,12 +116,12 @@ pub enum Either<L, R> {L(L), R(R)}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Then<OP, EP, OQ, EQ, X, P, Q>
-    where 
-        X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
-        P: Parser<OP, EP, X>, 
-        Q: Parser<OQ, EQ, X>,
-        OP: Clone, OQ: Clone,
-        EP: Clone, EQ: Clone
+where 
+    X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
+    P: Parser<OP, EP, X>, 
+    Q: Parser<OQ, EQ, X>,
+    OP: Clone, OQ: Clone,
+    EP: Clone, EQ: Clone
 {
     lhs: P,
     rhs: Q,
@@ -164,12 +164,12 @@ impl<OP, EP, OQ, EQ, X, P, Q> Add<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
     }
 }
 impl<OP, EP, OQ, EQ, X, P, Q> Rem<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P> 
-    where 
-        X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OQ, Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
-        P: Parser<OP, EP, X>, 
-        Q: Parser<OQ, EQ, X>,
-        OP: Clone, OQ: Clone,
-        EP: Clone, EQ: Clone
+where 
+      X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OQ, Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
+      P: Parser<OP, EP, X>, 
+      Q: Parser<OQ, EQ, X>,
+      OP: Clone, OQ: Clone,
+      EP: Clone, EQ: Clone
 {
     type Output = Tag<OQ, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OQ, fn(X, (OP, OQ)) -> OQ>>;
     fn rem(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
@@ -178,12 +178,12 @@ impl<OP, EP, OQ, EQ, X, P, Q> Rem<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
     }
 }
 impl<OP, EP, OQ, EQ, X, P, Q> Div<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P> 
-    where 
-        X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OP, Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
-        P: Parser<OP, EP, X>, 
-        Q: Parser<OQ, EQ, X>,
-        OP: Clone, OQ: Clone,
-        EP: Clone, EQ: Clone
+where 
+      X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OP, Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
+      P: Parser<OP, EP, X>, 
+      Q: Parser<OQ, EQ, X>,
+      OP: Clone, OQ: Clone,
+      EP: Clone, EQ: Clone
 {
     type Output = Tag<OP, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OP, fn(X, (OP, OQ)) -> OP>>;
     fn div(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
