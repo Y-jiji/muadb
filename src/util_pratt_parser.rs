@@ -7,64 +7,79 @@
 use std::{any::Any, cell::OnceCell, fmt::Debug, marker::PhantomData, ops::{Add, BitAnd, BitOr, BitXor, Index, Mul, Range, Rem, Shr, Div}, os::unix::process, sync::{atomic::AtomicU64, Arc}};
 
 // memorization buffer + output/error allocation buffer
-pub trait Extra<O, E> {
+pub trait Extra<O, E>: Clone 
+    where
+        O: Clone,
+        E: Clone
+{
     // mark a progress is visited by a parser
     fn mark(&self, progress: usize, tag: u64) { }
     // record execution result
-    fn record(&self, progress: usize, tag: u64, result: Result<(usize, &O), (usize, &E)>)   {  }
+    fn record(&self, progress: usize, tag: u64, result: Result<(usize, O), (usize, E)>)   {  }
     // replay an expression
-    fn replay(&self, progress: usize, tag: u64) -> Option<Result<(usize, &O), (usize, &E)>> { None }
-    // allocate output
-    fn out(&self, o: O) -> &O;
-    // allocate error
-    fn err(&self, e: E) -> &E;
+    fn replay(&self, progress: usize, tag: u64) -> Option<Result<(usize, O), (usize, E)>> { None }
 }
 
 // a general parser trait
-pub trait Parser<'p, O, E, X>: Sized 
-    where O: 'p, E: 'p, X: Extra<O, E> + 'p,
+pub trait Parser<O, E, X>: Sized 
+    where
+        X: Extra<O, E> + Clone, 
+        O: Clone, 
+        E: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'p X) -> Result<(usize, &'p O), (usize, &'p E)>;
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)>;
     fn tag(&self) -> u64 { 0 }
-    fn tagged(self) -> Tag<'p, O, E, X, Self> { Tag::new(self) }
 }
 
 #[derive(Debug)]
-pub struct Tag<'p, O, E, X, P>
-    where O: 'p, E: 'p, X: Extra<O, E> + 'p, P: Parser<'p, O, E, X>,
+pub struct Tag<O, E, X, P>
+    where
+        P: Parser<O, E, X>,
+        X: Extra<O, E> + Clone, 
+        O: Clone, 
+        E: Clone
 {
     inner: P, tag: u64, 
-    phantom: PhantomData<(fn(&'p())->(), O, E, X)>
+    phantom: PhantomData<(O, E, X)>
 }
-impl<'p, O, E, X, P> Clone for Tag<'p, O, E, X, P>
-    where O: 'p, E: 'p, X: Extra<O, E> + 'p, P: Parser<'p, O, E, X> + Clone,
+impl<O, E, X, P> Clone for Tag<O, E, X, P>
+    where
+        P: Parser<O, E, X> + Clone,
+        X: Extra<O, E> + Clone, 
+        O: Clone, 
+        E: Clone
 {
     fn clone(&self) -> Self {
         Self { inner: self.inner.clone(), tag: self.tag, phantom: PhantomData }
     }
 }
-impl<'p, O, E, X, P> Parser<'p, O, E, X> for Tag<'p, O, E, X, P>
-    where O: 'p, E: 'p, X: Extra<O, E> + 'p, P: Parser<'p, O, E, X>,
+impl<O, E, X, P> Parser<O, E, X> for Tag<O, E, X, P>
+    where
+        P: Parser<O, E, X>,
+        X: Extra<O, E> + Clone, 
+        O: Clone, 
+        E: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'p X) -> Result<(usize, &'p O), (usize, &'p E)> {
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)> {
         if self.tag() == 0 {
             return self.inner.parse(input, progress, extra);
         }
         if let Some(result) = extra.replay(progress, self.tag) {
-            return result;
+            return result.clone();
         }
         extra.mark(progress, self.tag);
-        let result = self.inner.parse(input, progress, extra);
+        let result = self.inner.parse(input, progress, extra.clone());
         extra.record(progress, self.tag, result.clone());
         return result;
     }
     fn tag(&self) -> u64 { self.tag }
 }
-impl<'p, O, E, X, P> Tag<'p, O, E, X, P>
-where
-    P: Parser<'p, O, E, X>, 
-    O: 'p, E: 'p, X: 'p, 
-    X: Extra<O, E>
+impl<O, E, X, P> Tag<O, E, X, P>
+    where
+        P: Parser<O, E, X>,
+        X: Extra<O, E> + Clone, 
+        O: Clone, 
+        E: Clone
 {
     pub fn new(inner: P) -> Self {
         static COUNT: AtomicU64 = AtomicU64::new(1);
@@ -74,20 +89,20 @@ where
         };
         Tag{inner, tag, phantom: PhantomData}
     }
-    pub fn out<Z, FUNC>(self, map: FUNC) -> Tag<'p, Z, E, X, MapOut<'p, O, E, X, P, Z, FUNC>>
+    pub fn out<Z, FUNC>(self, map: FUNC) -> Tag<Z, E, X, MapOut<O, E, X, P, Z, FUNC>>
         where X: Extra<Z, E>,
-              Z: 'p,
-              FUNC: Fn(&'p X, &'p O) -> &'p Z,
+              Z: Clone,
+              FUNC: Fn(X, O) -> Z,
     {
         Tag{
             inner: MapOut{map, inner: self.inner, phantom: PhantomData}, 
             tag:self.tag, phantom: PhantomData
         }
     }
-    pub fn err<Z, FUNC>(self, map: FUNC) -> Tag<'p, O, Z, X, MapErr<'p, O, E, X, P, Z, FUNC>>
+    pub fn err<Z, FUNC>(self, map: FUNC) -> Tag<O, Z, X, MapErr<O, E, X, P, Z, FUNC>>
         where X: Extra<O, Z>,
-              Z: 'p,
-              FUNC: Fn(&'p X, &'p E) -> &'p Z,
+              Z: Clone,
+              FUNC: Fn(X, E) -> Z,
     {
         Tag{
             inner: MapErr{map, inner: self.inner, phantom: PhantomData}, 
@@ -100,163 +115,180 @@ where
 pub enum Either<L, R> {L(L), R(R)}
 
 #[derive(Debug, Clone, Copy)]
-pub struct Then<'p, OP, EP, OQ, EQ, X, P, Q>
-    where OP: 'p, EP: 'p,
-          OQ: 'p, EQ: 'p, 
-          X: Extra<(&'p OP, &'p OQ), Either<&'p EP, &'p EQ>> + Extra<OP, EP> + Extra<OQ, EQ> + 'p, 
-          P: Parser<'p, OP, EP, X>, 
-          Q: Parser<'p, OQ, EQ, X>
+pub struct Then<OP, EP, OQ, EQ, X, P, Q>
+    where 
+        X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
+        P: Parser<OP, EP, X>, 
+        Q: Parser<OQ, EQ, X>,
+        OP: Clone, OQ: Clone,
+        EP: Clone, EQ: Clone
 {
     lhs: P,
     rhs: Q,
-    phant: PhantomData<(fn(&'p()), OP, EP, OQ, EQ, X, P, Q)>
+    phant: PhantomData<(OP, EP, OQ, EQ, X, P, Q)>
 }
-impl<'p, OP, EP, OQ, EQ, X, P, Q> Parser<'p, (&'p OP, &'p OQ), Either<&'p EP, &'p EQ>, X>  for Then<'p, OP, EP, OQ, EQ, X, P, Q>
-    where OP: 'p, EP: 'p,
-          OQ: 'p, EQ: 'p, 
-          X: Extra<(&'p OP, &'p OQ), Either<&'p EP, &'p EQ>> + Extra<OP, EP> + Extra<OQ, EQ> + 'p, 
-          P: Parser<'p, OP, EP, X>, 
-          Q: Parser<'p, OQ, EQ, X>
+impl<OP, EP, OQ, EQ, X, P, Q> Parser<(OP, OQ), Either<EP, EQ>, X>  for Then<OP, EP, OQ, EQ, X, P, Q>
+    where 
+        X: Extra<(OP, OQ), Either<EP, EQ>>,
+        X: Extra<OP, EP> + Extra<OQ, EQ>, 
+        P: Parser<OP, EP, X>, 
+        Q: Parser<OQ, EQ, X>,
+        OP: Clone, OQ: Clone,
+        EP: Clone, EQ: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'p X) -> Result<(usize, &'p (&'p OP, &'p OQ)), (usize, &'p Either<&'p EP, &'p EQ>)> {
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, (OP, OQ)), (usize, Either<EP, EQ>)> {
         let start = progress;
-        let (progress, lhs) = match Parser::<'p>::parse(&self.lhs, input, progress, extra) {
+        let (progress, lhs) = match Parser::parse(&self.lhs, input, progress, extra.clone()) {
             Ok((progress, lhs)) => (progress, lhs),
-            Err((progress, err)) => return Err((start, extra.err(Either::L(err))))
+            Err((progress, err)) => return Err((start, Either::L(err)))
         };
-        let (progress, rhs) = match Parser::<'p>::parse(&self.rhs, input, progress, extra) {
+        let (progress, rhs) = match Parser::parse(&self.rhs, input, progress, extra.clone()) {
             Ok((progress, rhs)) => (progress, rhs),
-            Err((progress, err)) => return Err((start, extra.err(Either::R(err))))
+            Err((progress, err)) => return Err((start, Either::R(err)))
         };
-        Ok((progress, extra.out((lhs, rhs))))
+        Ok((progress, (lhs, rhs)))
     }
 }
-impl<'p, OP, EP, OQ, EQ, X, P, Q> Add<Tag<'p, OQ, EQ, X, Q>> for Tag<'p, OP, EP, X, P>
-    where OP: 'p, EP: 'p,
-          OQ: 'p, EQ: 'p, 
-          X: Extra<(&'p OP, &'p OQ), Either<&'p EP, &'p EQ>> + Extra<OP, EP> + Extra<OQ, EQ> + 'p, 
-          P: Parser<'p, OP, EP, X>, 
-          Q: Parser<'p, OQ, EQ, X>
+impl<OP, EP, OQ, EQ, X, P, Q> Add<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
+    where 
+          X: Extra<(OP, OQ), Either<EP, EQ>>,
+          X: Extra<OP, EP> + Extra<OQ, EQ>, 
+          P: Parser<OP, EP, X>, 
+          Q: Parser<OQ, EQ, X>,
+          OP: Clone, OQ: Clone,
+          EP: Clone, EQ: Clone
 {
-    type Output = Tag<'p, (&'p OP, &'p OQ), Either<&'p EP, &'p EQ>, X, Then<'p, OP, EP, OQ, EQ, X, Tag<'p, OP, EP, X, P>, Tag<'p, OQ, EQ, X, Q>>>;
-    fn add(self, rhs: Tag<'p, OQ, EQ, X, Q>) -> Self::Output {
+    type Output = Tag<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>>;
+    fn add(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
         Tag::new(Then { lhs: self, rhs, phant: PhantomData })
     }
 }
-impl<'p, OP, EP, OQ, EQ, X, P, Q> Rem<Tag<'p, OQ, EQ, X, Q>> for Tag<'p, OP, EP, X, P> 
-where OP: 'p, EP: 'p,
-      OQ: 'p, EQ: 'p, 
-      X: Extra<(&'p OP, &'p OQ), Either<&'p EP, &'p EQ>> + Extra<OQ, Either<&'p EP, &'p EQ>> + Extra<OP, EP> + Extra<OQ, EQ> + 'p, 
-      P: Parser<'p, OP, EP, X>, 
-      Q: Parser<'p, OQ, EQ, X>
+impl<OP, EP, OQ, EQ, X, P, Q> Rem<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P> 
+    where 
+        X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OQ, Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
+        P: Parser<OP, EP, X>, 
+        Q: Parser<OQ, EQ, X>,
+        OP: Clone, OQ: Clone,
+        EP: Clone, EQ: Clone
 {
-    type Output = Tag<'p, OQ, Either<&'p EP, &'p EQ>, X, MapOut<'p, (&'p OP, &'p OQ), Either<&'p EP, &'p EQ>, X, Then<'p, OP, EP, OQ, EQ, X, Tag<'p, OP, EP, X, P>, Tag<'p, OQ, EQ, X, Q>>, OQ, fn(&'p X, &'p (&'p OP, &'p OQ)) -> &'p OQ>>;
-    fn rem(self, rhs: Tag<'p, OQ, EQ, X, Q>) -> Self::Output {
-        fn unwrap<'p, X, OP, OQ>(extra: &'p X, (p, q): &'p (&'p OP, &'p OQ)) -> &'p OQ { q }
+    type Output = Tag<OQ, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OQ, fn(X, (OP, OQ)) -> OQ>>;
+    fn rem(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
+        fn unwrap<X, OP, OQ>(extra: X, (p, q): (OP, OQ)) -> OQ { q }
         (self + rhs).out(unwrap)
     }
 }
-impl<'p, OP, EP, OQ, EQ, X, P, Q> Div<Tag<'p, OQ, EQ, X, Q>> for Tag<'p, OP, EP, X, P> 
-where OP: 'p, EP: 'p,
-      OQ: 'p, EQ: 'p, 
-      X: Extra<(&'p OP, &'p OQ), Either<&'p EP, &'p EQ>> + Extra<OP, Either<&'p EP, &'p EQ>> + Extra<OP, EP> + Extra<OQ, EQ> + 'p, 
-      P: Parser<'p, OP, EP, X>, 
-      Q: Parser<'p, OQ, EQ, X>
+impl<OP, EP, OQ, EQ, X, P, Q> Div<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P> 
+    where 
+        X: Extra<(OP, OQ), Either<EP, EQ>> + Extra<OP, Either<EP, EQ>> + Extra<OP, EP> + Extra<OQ, EQ>, 
+        P: Parser<OP, EP, X>, 
+        Q: Parser<OQ, EQ, X>,
+        OP: Clone, OQ: Clone,
+        EP: Clone, EQ: Clone
 {
-    type Output = Tag<'p, OP, Either<&'p EP, &'p EQ>, X, MapOut<'p, (&'p OP, &'p OQ), Either<&'p EP, &'p EQ>, X, Then<'p, OP, EP, OQ, EQ, X, Tag<'p, OP, EP, X, P>, Tag<'p, OQ, EQ, X, Q>>, OP, fn(&'p X, &'p (&'p OP, &'p OQ)) -> &'p OP>>;
-    fn div(self, rhs: Tag<'p, OQ, EQ, X, Q>) -> Self::Output {
-        fn unwrap<'p, X, OP, OQ>(extra: &'p X, (p, q): &'p (&'p OP, &'p OQ)) -> &'p OP { p }
+    type Output = Tag<OP, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OP, fn(X, (OP, OQ)) -> OP>>;
+    fn div(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
+        fn unwrap<X, OP, OQ>(extra: X, (p, q): (OP, OQ)) -> OP { p }
         (self + rhs).out(unwrap)
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Else<'p, OP, EP, OQ, EQ, X, P, Q>
-    where OP: 'p, EP: 'p,
-          OQ: 'p, EQ: 'p, 
-          X: Extra<Either<&'p OP, &'p OQ>, (&'p EP, &'p EQ)> + Extra<OP, EP> + Extra<OQ, EQ> + 'p, 
-          P: Parser<'p, OP, EP, X>, 
-          Q: Parser<'p, OQ, EQ, X>
+pub struct Else<OP, EP, OQ, EQ, X, P, Q>
+    where 
+          X: Extra<Either<OP, OQ>, (EP, EQ)> + Extra<OP, EP> + Extra<OQ, EQ>, 
+          P: Parser<OP, EP, X>, 
+          Q: Parser<OQ, EQ, X>,
+          OP: Clone, OQ: Clone,
+          EP: Clone, EQ: Clone
 {
     lhs: P,
     rhs: Q,
-    phant: PhantomData<(fn(&'p()), OP, EP, OQ, EQ, X, P, Q)>
+    phant: PhantomData<(OP, EP, OQ, EQ, X, P, Q)>
 }
-impl<'p, OP, EP, OQ, EQ, X, P, Q> Parser<'p, Either<&'p OP, &'p OQ>, (&'p EP, &'p EQ), X> for Else<'p, OP, EP, OQ, EQ, X, P, Q>
-    where OP: 'p, EP: 'p,
-          OQ: 'p, EQ: 'p, 
-          X: Extra<Either<&'p OP, &'p OQ>, (&'p EP, &'p EQ)> + Extra<OP, EP> + Extra<OQ, EQ> + 'p, 
-          P: Parser<'p, OP, EP, X>, 
-          Q: Parser<'p, OQ, EQ, X>
+impl<OP, EP, OQ, EQ, X, P, Q> Parser<Either<OP, OQ>, (EP, EQ), X> for Else<OP, EP, OQ, EQ, X, P, Q>
+    where 
+          X: Extra<Either<OP, OQ>, (EP, EQ)> + Extra<OP, EP> + Extra<OQ, EQ>, 
+          P: Parser<OP, EP, X>, 
+          Q: Parser<OQ, EQ, X>,
+          OP: Clone, OQ: Clone,
+          EP: Clone, EQ: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'p X) -> Result<(usize, &'p Either<&'p OP, &'p OQ>), (usize, &'p (&'p EP, &'p EQ))> {
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, Either<OP, OQ>), (usize, (EP, EQ))> {
         let start = progress;
-        let (progress, lhs) = match Parser::<'p>::parse(&self.lhs, input, progress, extra) {
+        let (progress, lhs) = match Parser::parse(&self.lhs, input, progress, extra.clone()) {
             Err((progress, lhs)) => (start, lhs),
-            Ok((progress, err)) => return Ok((progress, extra.out(Either::L(err))))
+            Ok((progress, err)) => return Ok((progress, Either::L(err)))
         };
-        let (progress, rhs) = match Parser::<'p>::parse(&self.rhs, input, progress, extra) {
+        let (progress, rhs) = match Parser::parse(&self.rhs, input, progress, extra.clone()) {
             Err((progress, rhs)) => (start, rhs),
-            Ok((progress, err)) => return Ok((progress, extra.out(Either::R(err))))
+            Ok((progress, err)) => return Ok((progress, Either::R(err)))
         };
-        Err((start, extra.err((lhs, rhs))))
+        Err((start, (lhs, rhs)))
     }
 }
-impl<'p, OP, EP, OQ, EQ, X, P, Q> BitOr<Tag<'p, OQ, EQ, X, Q>> for Tag<'p, OP, EP, X, P>
-    where OP: 'p, EP: 'p,
-          OQ: 'p, EQ: 'p, 
-          X: Extra<Either<&'p OP, &'p OQ>, (&'p EP, &'p EQ)> + Extra<OP, EP> + Extra<OQ, EQ> + 'p, 
-          P: Parser<'p, OP, EP, X>, 
-          Q: Parser<'p, OQ, EQ, X>
+impl<OP, EP, OQ, EQ, X, P, Q> BitOr<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
+    where 
+          X: Extra<Either<OP, OQ>, (EP, EQ)> + Extra<OP, EP> + Extra<OQ, EQ>, 
+          P: Parser<OP, EP, X>, 
+          Q: Parser<OQ, EQ, X>,
+          OP: Clone, OQ: Clone,
+          EP: Clone, EQ: Clone
 {
-    type Output = Tag<'p, Either<&'p OP, &'p OQ>, (&'p EP, &'p EQ), X, Else<'p, OP, EP, OQ, EQ, X, Tag<'p, OP, EP, X, P>, Tag<'p, OQ, EQ, X, Q>>>;
-    fn bitor(self, rhs: Tag<'p, OQ, EQ, X, Q>) -> Self::Output {
+    type Output = Tag<Either<OP, OQ>, (EP, EQ), X, Else<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>>;
+    fn bitor(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
         Tag::new(Else { lhs: self, rhs, phant: PhantomData })
     }
 }
-impl<'p, O, EP, EQ, X, P, Q> BitXor<Tag<'p, O, EQ, X, Q>> for Tag<'p, O, EP, X, P>
+impl<O, EP, EQ, X, P, Q> BitXor<Tag<O, EQ, X, Q>> for Tag<O, EP, X, P>
 where 
-    O: 'p, EP: 'p, EQ: 'p, 
-    X: Extra<Either<&'p O, &'p O>, (&'p EP, &'p EQ)> + Extra<O, (&'p EP, &'p EQ)> + Extra<O, EP> + Extra<O, EQ> + 'p, 
-    P: Parser<'p, O, EP, X>, 
-    Q: Parser<'p, O, EQ, X>
+    X: Extra<Either<O, O>, (EP, EQ)> + Extra<O, (EP, EQ)> + Extra<O, EP> + Extra<O, EQ>, 
+    P: Parser<O, EP, X>, 
+    Q: Parser<O, EQ, X>,
+    O: Clone,
+    EP: Clone, EQ: Clone
 {
-    type Output = Tag<'p, O, (&'p EP, &'p EQ), X, MapOut<'p, Either<&'p O, &'p O>, (&'p EP, &'p EQ), X, Else<'p, O, EP, O, EQ, X, Tag<'p, O, EP, X, P>, Tag<'p, O, EQ, X, Q>>, O, fn(&'p  X, &'p  Either<&'p  O, &'p  O>) -> &'p O>>;
-    fn bitxor(self, rhs: Tag<'p, O, EQ, X, Q>) -> Self::Output {
-        fn map<'p, A, Z>(a: &'p A, b: &'p Either<&'p Z, &'p Z>) -> &'p Z {
+    type Output = Tag<O, (EP, EQ), X, MapOut<Either<O, O>, (EP, EQ), X, Else<O, EP, O, EQ, X, Tag<O, EP, X, P>, Tag<O, EQ, X, Q>>, O, fn( X,  Either< O,  O>) -> O>>;
+    fn bitxor(self, rhs: Tag<O, EQ, X, Q>) -> Self::Output {
+        fn map<A, Z>(a: A, b: Either<Z, Z>) -> Z {
             match b { Either::L(x) => x, Either::R(x) => x }
         }
         (self | rhs).out(map)
     }
 }
 
-struct Helper<'p, O: 'p, E: 'p, X> {
+struct Helper<O, E, X> {
     // pointer to external parser object
     that: *const u8, 
     // Safety: since parse don't mutate self, this Helper can be viewed as a Fn(...) -> ... object
-    parse: fn(*const u8, &str, usize, &'p X) -> Result<(usize, &'p O), (usize, &'p E)>,
+    parse: fn(*const u8, &str, usize, X) -> Result<(usize, O), (usize, E)>,
     // destruct self
     destruct: fn(*const u8)
 }
-impl<'p, O, E, X> Drop for Helper<'p, O, E, X> {
+impl<O, E, X> Drop for Helper<O, E, X> {
     fn drop(&mut self) {
         (self.destruct)(self.that);
     }
 }
 
-pub struct Recursive<'p, O: 'p, E: 'p, X>(Arc<OnceCell<Helper<'p, O, E, X>>>);
-impl<'p, O: 'p, E: 'p, X> Parser<'p, O, E, X> for Recursive<'p, O, E, X> 
-    where X: Extra<O, E>
+pub struct Recursive<O, E, X>(Arc<OnceCell<Helper<O, E, X>>>);
+impl<O, E, X> Parser<O, E, X> for Recursive<O, E, X> 
+    where
+        X: Extra<O, E> + Clone, 
+        O: Clone, 
+        E: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'p X) -> Result<(usize, &'p O), (usize, &'p E)> {
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)> {
         let this = self.clone();
         let Helper{that, parse, ..} = this.0.as_ref().get().unwrap();
         parse(*that, input, progress, extra)
     }
 }
-pub fn recurse<'p, O: 'p, E: 'p, X, P>(builder: impl FnOnce(Tag<'p, O, E, X, Recursive<'p, O, E, X>>) -> P) -> Tag<'p, O, E, X, Recursive<'p, O, E, X>>
-    where X: Extra<O, E>,
-          P: Parser<'p, O, E, X>,
+pub fn recurse<O, E, X, P>(builder: impl FnOnce(Tag<O, E, X, Recursive<O, E, X>>) -> P) -> Tag<O, E, X, Recursive<O, E, X>>
+where
+    X: Extra<O, E> + Clone, 
+    O: Clone, 
+    E: Clone,
+    P: Parser<O, E, X>
 {
     let this: Tag<O, E, X, Recursive<O, E, X>> = Tag::new(Recursive(Arc::new(OnceCell::new())));
     let that = Box::leak(Box::new(Tag::new(builder(this.clone())))) as *const _ as *const u8;
@@ -269,44 +301,51 @@ pub fn recurse<'p, O: 'p, E: 'p, X, P>(builder: impl FnOnce(Tag<'p, O, E, X, Rec
     this.inner.0.as_ref().set(Helper{that, parse, destruct});
     return this;
 }
-impl<'a, O, E, X> std::fmt::Debug for Recursive<'a, O, E, X> 
-    where X: Extra<O, E>
+impl<O, E, X> std::fmt::Debug for Recursive<O, E, X> 
+    where X: Extra<O, E>,
+          O: Clone,
+          E: Clone
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Recursive(inner: {:?})", &self.0 as *const _)
     }
 }
-impl<'a, O, E, X> Clone for Recursive<'a, O, E, X> {
+impl<O, E, X> Clone for Recursive<O, E, X> {
     fn clone(&self) -> Self {
         Recursive(Arc::clone(&self.0))
     }
 }
 
 #[derive(Clone, Debug, Copy)]
-pub struct Repeat<'p, O, E, X, P, Z, INIT, FOLD>
-    where P: Parser<'p, O, E, X>, 
-          O: 'p, E: 'p, X: 'p, Z: 'p,
-          FOLD: Fn(&'p X, &'p mut Z, &'p O) -> &'p mut Z,
-          INIT: Fn(&'p X) -> &'p mut Z,
+pub struct Repeat<O, E, X, P, Z, INIT, FOLD>
+    where P: Parser<O, E, X>, 
+          O: Clone, 
+          E: Clone,
+          Z: Clone,
+          FOLD: Fn(X, Z, O) -> Z,
+          INIT: Fn(X) -> Z,
           X: Extra<O, E> + Extra<Z, E>,
 {
     inner: P,
     fold: FOLD,
     init: INIT,
-    phantom: PhantomData<(fn(&'p()), O, E, X, Z)>
+    phantom: PhantomData<(O, E, X, Z)>
 }
-impl<'p, O, E, X, P, Z, INIT, FOLD> Parser<'p, Z, E, X> for Repeat<'p, O, E, X, P, Z, INIT, FOLD>
-where P: Parser<'p, O, E, X>, 
-      O: 'p, E: 'p, X: 'p, Z: 'p,
-      FOLD: Fn(&'p X, &'p mut Z, &'p O) -> &'p mut Z,
-      INIT: Fn(&'p X) -> &'p mut Z,
-      X: Extra<O, E> + Extra<Z, E>,
+impl<O, E, X, P, Z, INIT, FOLD> Parser<Z, E, X> for Repeat<O, E, X, P, Z, INIT, FOLD>
+    where
+        P: Parser<O, E, X>, 
+        O: Clone, 
+        E: Clone,
+        Z: Clone,
+        FOLD: Fn(X, Z, O) -> Z,
+        INIT: Fn(X) -> Z,
+        X: Extra<O, E> + Extra<Z, E> + Clone,
 {
-    fn parse(&self, input: &str, mut progress: usize, extra: &'p X) -> Result<(usize, &'p Z), (usize, &'p E)> {
-        let mut ini = (self.init)(extra);
+    fn parse(&self, input: &str, mut progress: usize, extra: X) -> Result<(usize, Z), (usize, E)> {
+        let mut ini = (self.init)(extra.clone());
         loop {
-            let (progress_new, out) = match self.inner.parse(input, progress, extra) {
-                Ok((progress, out)) => (progress, (self.fold)(extra, ini, out)),
+            let (progress_new, out) = match self.inner.parse(input, progress, extra.clone()) {
+                Ok((progress, out)) => (progress, (self.fold)(extra.clone(), ini, out)),
                 Err(e) => return Ok((progress, ini)),
             };
             progress = progress_new;
@@ -314,14 +353,17 @@ where P: Parser<'p, O, E, X>,
         }
     }
 }
-impl<'p, O, E, X, P, Z, INIT, FOLD> Shr<(INIT, FOLD)> for Tag<'p, O, E, X, P>
-where P: Parser<'p, O, E, X>, 
-      O: 'p, E: 'p, X: 'p, Z: 'p,
-      FOLD: Fn(&'p X, &'p mut Z, &'p O) -> &'p mut Z,
-      INIT: Fn(&'p X) -> &'p mut Z,
-      X: Extra<O, E> + Extra<Z, E>,
+impl<O, E, X, P, Z, INIT, FOLD> Shr<(INIT, FOLD)> for Tag<O, E, X, P>
+    where
+        P: Parser<O, E, X>, 
+        O: Clone, 
+        E: Clone,
+        Z: Clone,
+        FOLD: Fn(X, Z, O) -> Z,
+        INIT: Fn(X) -> Z,
+        X: Extra<O, E> + Extra<Z, E> + Clone,
 {
-    type Output = Tag<'p, Z, E, X, Repeat<'p, O, E, X, Tag<'p, O, E, X, P>, Z, INIT, FOLD>>;
+    type Output = Tag<Z, E, X, Repeat<O, E, X, Tag<O, E, X, P>, Z, INIT, FOLD>>;
     fn shr(self, (init, fold): (INIT, FOLD)) -> Self::Output {
         Tag::new(Repeat{
             inner: self,
@@ -332,26 +374,30 @@ where P: Parser<'p, O, E, X>,
 }
 
 #[derive(Clone, Debug, Copy)]
-pub struct MapOut<'p, O, E, X, P, Z, FUNC>
+pub struct MapOut<O, E, X, P, Z, FUNC>
 where 
-    P: Parser<'p, O, E, X>, 
-    O: 'p, E: 'p, X: 'p, Z: 'p,
-    FUNC: Fn(&'p X, &'p O) -> &'p Z,
+    P: Parser<O, E, X>, 
+    O: Clone,
+    E: Clone,
+    Z: Clone,
+    FUNC: Fn(X, O) -> Z,
     X: Extra<O, E> + Extra<Z, E>
 {
     map: FUNC,
     inner: P,
-    phantom: PhantomData<(fn(&'p()), O, E, X, Z)>
+    phantom: PhantomData<(O, E, X, Z)>
 }
-impl<'p, O, E, X, P, Z, FUNC> Parser<'p, Z, E, X> for MapOut<'p, O, E, X, P, Z, FUNC>
+impl<O, E, X, P, Z, FUNC> Parser<Z, E, X> for MapOut<O, E, X, P, Z, FUNC>
 where 
-    P: Parser<'p, O, E, X>, 
-    O: 'p, E: 'p, X: 'p, Z: 'p,
-    FUNC: Fn(&'p X, &'p O) -> &'p Z,
+    P: Parser<O, E, X>, 
+    O: Clone,
+    E: Clone,
+    Z: Clone,
+    FUNC: Fn(X, O) -> Z,
     X: Extra<O, E> + Extra<Z, E>
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'p X) -> Result<(usize, &'p Z), (usize, &'p E)> {
-        match self.inner.parse(input, progress, extra) {
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, Z), (usize, E)> {
+        match self.inner.parse(input, progress, extra.clone()) {
             Ok((progress, out)) => Ok((progress, (self.map)(extra, out))),
             Err(e) => Err(e),
         }
@@ -359,27 +405,31 @@ where
 }
 
 #[derive(Clone, Debug, Copy)]
-pub struct MapErr<'p, O, E, X, P, Z, FUNC>
+pub struct MapErr<O, E, X, P, Z, FUNC>
 where 
-    P: Parser<'p, O, E, X>, 
-    O: 'p, E: 'p, X: 'p, Z: 'p,
-    FUNC: Fn(&'p X, &'p E) -> &'p Z,
+    P: Parser<O, E, X>, 
+    O: Clone,
+    E: Clone,
+    Z: Clone,
+    FUNC: Fn(X, E) -> Z,
     X: Extra<O, E> + Extra<O, Z>
 {
     map: FUNC,
     inner: P,
-    phantom: PhantomData<(fn(&'p()), O, E, X, Z)>
+    phantom: PhantomData<(O, E, X, Z)>
 }
-impl<'p, O, E, X, P, Z, FUNC> Parser<'p, O, Z, X> for MapErr<'p, O, E, X, P, Z, FUNC>
+impl<O, E, X, P, Z, FUNC> Parser<O, Z, X> for MapErr<O, E, X, P, Z, FUNC>
 where 
-    P: Parser<'p, O, E, X>, 
-    O: 'p, E: 'p, X: 'p, Z: 'p,
-    FUNC: Fn(&'p X, &'p E) -> &'p Z,
+    P: Parser<O, E, X>, 
+    O: Clone,
+    E: Clone,
+    Z: Clone,
+    FUNC: Fn(X, E) -> Z,
     X: Extra<O, E> + Extra<O, Z>
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'p X) -> Result<(usize, &'p O), (usize, &'p Z)> {
-        match self.inner.parse(input, progress, extra) {
-            Err((progress, err)) => Err((progress, (self.map)(extra, err))),
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, Z)> {
+        match self.inner.parse(input, progress, extra.clone()) {
+            Err((progress, err)) => Err((progress, (self.map)(extra.clone(), err))),
             Ok(o) => Ok(o),
         }
     }
@@ -390,41 +440,41 @@ pub struct Token<X: Extra<(), ()>> {
     token: &'static str, 
     alloc: PhantomData<X>,
 }
-impl<'a, X> Token<X>
-    where X: Extra<(), ()> + 'a
+impl<X> Token<X>
+    where X: Extra<(), ()>
 {
-    pub fn new(token: &'static str) -> Tag<'a, (), (), X, Self> {
+    pub fn new(token: &'static str) -> Tag<(), (), X, Self> {
         Tag::new(Token { token, alloc: PhantomData })
     }
 }
-impl<'a, X> Parser<'a, (), (), X> for Token<X>
-    where X: Extra<(), ()> + 'a
+impl<X> Parser<(), (), X> for Token<X>
+    where X: Extra<(), ()>
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'a X) -> Result<(usize, &'a ()), (usize, &'a ())> {
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, ()), (usize, ())> {
         if input[progress..].starts_with(self.token) {
             log::debug!("TOKEN={:?} MATCHED", self.token);
-            Ok((progress + self.token.len(), extra.out(())))
+            Ok((progress + self.token.len(), ()))
         }
         else {
             log::debug!("TOKEN={:?} SEEN={:?}", self.token, &input[progress..(progress+self.token.len()).min(input.len())]);
-            Err((progress, extra.err(())))
+            Err((progress, ()))
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Pad<X>(PhantomData<X>);
-impl<'a, X> Pad<X>
-    where X: Extra<(), ()> + 'a
+impl<X> Pad<X>
+    where X: Extra<(), ()>
 {
-    pub fn new() -> Tag<'a, (), (), X, Self> {
+    pub fn new() -> Tag<(), (), X, Self> {
         Tag::new(Pad(PhantomData))
     }
 }
-impl<'a, X> Parser<'a, (), (), X> for Pad<X>
-    where X: Extra<(), ()> + 'a
+impl<X> Parser<(), (), X> for Pad<X>
+    where X: Extra<(), ()>
 {
-    fn parse(&self, input: &str, progress: usize, extra: &'a X) -> Result<(usize, &'a ()), (usize, &'a ())> {
+    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, ()), (usize, ())> {
         let mut cut = 0;
         let mut last = true;
         for (i, c) in input[progress..].char_indices() {
@@ -435,7 +485,7 @@ impl<'a, X> Parser<'a, (), (), X> for Pad<X>
         }
         if last { cut = input[progress..].len() }
         log::debug!("EAT SPACE={cut}");
-        Ok((progress + cut, extra.out(())))
+        Ok((progress + cut, ()))
     }
 }
 
@@ -444,14 +494,7 @@ mod test {
     use super::*;
     use bumpalo::Bump;
 
-    impl<O, E> Extra<O, E> for Bump {
-        fn err(&self, e: E) -> &E {
-            self.alloc(e)
-        }
-        fn out(&self, o: O) -> &O {
-            self.alloc(o)   
-        }
-    }
+    impl<'a, O: Clone + 'a, E: Clone + 'a> Extra<O, E> for &'a Bump {}
 
     #[test]
     fn alphabet() {
@@ -460,14 +503,15 @@ mod test {
         let b = || Token::new("b");
         fn take_left<A, B, C>(_: C, (a, b): (A, B)) -> A { a }
         fn unwrap<A, B, C>(_: C, a: Either<A, B>) -> () { () }
-        let parser = recurse::<i64, (), Bump, _>(|this| {
+        let parser = recurse::<i64, (), &Bump, _>(|this| {
             (a() + this.clone()).out(|extra, (lhs, rhs)| {
-                extra.alloc(**rhs + 20)
-            }) 
-            ^ (b().out(|extra: &Bump, _| extra.alloc(1)))
-        }.err(|extra, _| extra.alloc(())));
+                rhs + 20
+            })
+            ^ 
+            (b().out(|extra: &Bump, _| 1))
+        }.err(|extra, _| ()));
         let example = "aaabb";
         let this = parser.parse(&example, 0, &bump);
-        assert!(&61 == this.unwrap().1);
+        assert!(61 == this.unwrap().1);
     }
 }

@@ -43,7 +43,7 @@ pub enum SQLJoinMethod {
 }
 
 // SQLError
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum SQLError<'a> {
     UndefinedSymbol(usize, &'a str),
     Unknown,
