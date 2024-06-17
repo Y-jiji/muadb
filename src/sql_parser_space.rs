@@ -2,8 +2,8 @@ use std::{cell::{Cell, RefCell}, fmt::Debug, ops::Add, sync::Arc};
 use bumpalo::{Bump, collections::Vec as BVec};
 use crate::util_pratt_parser::*;
 
-// Each SQL is allocated in this holder structure. 
-// We also use it for symbol table and as parsing cache. 
+/// Each SQL is allocated in this holder structure. 
+/// We also use it for symbol table and as parsing cache. 
 #[derive(Debug, Clone)]
 pub struct SQLSpace<'a> {
     pub bump: &'a Bump,
@@ -29,9 +29,9 @@ impl<'a, O: Debug + Clone, E: Debug + Clone> Extra<O, E> for SQLSpace<'a> {
         return false
     }
     fn record(&self, progress: usize, tag: u64, result: Result<(usize, O), (usize, E)>) {
-        // Safety: allocation is managed by bumpalo (without *external heap allocation*)
-        // Therefore, transmuting &u8 <-> &Result is safe as each reference is only used as one &Result type. 
-        // No lifetime change happens, so no need to worray about that. 
+        //! Safety: allocation is managed by bumpalo (without *external heap allocation*)
+        //! Therefore, transmuting &u8 <-> &Result is safe as each reference is only used as one &Result type. 
+        //! No lifetime change happens, so no need to worray about that. 
         log::debug!("TAG={tag:<3} PROGRESS={progress:<4} RESULT={result:?}");
         self.tag_slice.borrow_mut()[progress].push(check(tag));
         let result = unsafe { std::mem::transmute(self.bump.alloc(result)) };

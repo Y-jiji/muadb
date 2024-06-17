@@ -272,6 +272,9 @@ where
     E: Clone + Visited,
     P: Parser<O, E, X>
 {
+    //! Safety: types that implements Parser<O, E, X> are constitutes functions (input, X) -> Result<(O, usize), (E, usize)>
+    //! Therefore, if X, O, E don't change, the function signature don't change. 
+    //! Therefore, we don't require X, O, E to have 'static lifetime. 
     static COUNT: AtomicU64 = AtomicU64::new(1);
     use std::sync::atomic::Ordering::SeqCst;
     let tag = COUNT.fetch_add(1, SeqCst);
@@ -279,6 +282,7 @@ where
         tag, this: Arc::new(OnceCell::new())
     });
     let that = Box::new(Tag::new(builder(this.clone())));
+    // UNSAFE HERE
     this.inner.this.as_ref().set(unsafe{ std::mem::transmute(that as Box<dyn Parser<O, E, X>>) });
     return this;
 }
