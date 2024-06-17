@@ -113,6 +113,12 @@ impl<O, E, X, P> Tag<O, E, X, P>
 #[derive(Debug, Clone, Copy)]
 pub enum Either<L, R> {L(L), R(R)}
 
+impl<L> Either<L, L> {
+    pub fn unwrap(self) -> L {
+        match self { Either::L(x) => x, Either::R(x) => x }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Then<OP, EP, OQ, EQ, X, P, Q>
 where 
@@ -258,6 +264,9 @@ impl<OP, EP, OQ, EQ, X, P, Q> BitOr<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
 
 pub trait MergeIn<X> {
     fn merge(self, with: Self, x: &mut X) -> Self;
+    fn merge_with(x: &mut X, _: usize, y: (Self, Self)) -> Self where Self: Sized {
+        y.0.merge(y.1, x)
+    }
 }
 
 impl<O, E, X, P, Q> BitXor<Tag<O, E, X, Q>> for Tag<O, E, X, P>
@@ -455,7 +464,7 @@ where
 {
     fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, O), (usize, Z)> {
         match self.inner.parse(input, progress, extra) {
-            Err((progress, err)) => Err((progress, (self.map)(extra, progress, err))),
+            Err((_, err)) => Err((progress, (self.map)(extra, progress, err))),
             Ok(o) => Ok(o),
         }
     }
