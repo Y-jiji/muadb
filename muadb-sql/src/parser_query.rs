@@ -1,4 +1,4 @@
-use crate::sql_schema::*;
+use crate::schema::*;
 
 // In general, only expressions get compiled to physical operators
 pub enum SQLQuery<'a> {

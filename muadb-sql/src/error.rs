@@ -1,4 +1,5 @@
-use crate::{sql_parser_space::SQLSpace, util_pratt_parser::*};
+use crate::parser_space::SQLSpace;
+use muadb_util::*;
 
 // SQLError
 #[derive(Debug, Clone, Copy)]

@@ -1,5 +1,5 @@
-use crate::sql_schema::*;
-use crate::sql_parser_query::*;
+use crate::schema::*;
+use crate::parser_query::*;
 
 // SQL Statements that have side effects. 
 pub enum SQLStmt<'a> {

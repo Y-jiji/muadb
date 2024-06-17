@@ -1,6 +1,7 @@
-use crate::sql_schema::*;
-use crate::{sql_error::SQLError, sql_parser_space::SQLSpace, util_bytes::Bytes, util_pratt_parser::*};
+use crate::schema::*;
+use crate::{error::SQLError, parser_space::SQLSpace};
 use bumpalo::collections::Vec as BVec;
+use muadb_util::*;
 
 type SQLTag<'a, P> = Tag<SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>, P>;
 type SQLRec<'a> = Recursive<SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>>;
@@ -21,7 +22,7 @@ impl<'a> Parser<&'a str, SQLError<'a>, SQLSpace<'a>> for SQLIdent {
     }
 }
 
-pub fn sql_parser_schema<'a>() -> SQLTag<'a, SQLRec<'a>> {
+pub fn parser_schema<'a>() -> SQLTag<'a, SQLRec<'a>> {
     let tok = |token: &'static str| Token::new(token).pad().err(|_, at, _| SQLError::MismatchToken(at, token));
     let id = || Tag::new(SQLIdent).pad();
     // somehow write these simple options here makes it compiles faster
@@ -74,7 +75,7 @@ mod test {
         let input = "(a: i32, s: (i64, i64))";
         let bump = Bump::new();
         let mut space = SQLSpace::new(&bump, input);
-        let parser = sql_parser_schema();
+        let parser = parser_schema();
         println!("{:?}", parser.parse(input, 0, &mut space));
     }
 }

@@ -1,6 +1,6 @@
 use std::{cell::{Cell, RefCell}, fmt::Debug, ops::Add, sync::Arc};
 use bumpalo::{Bump, collections::Vec as BVec};
-use crate::util_pratt_parser::*;
+use muadb_util::*;
 
 /// Each SQL is allocated in this holder structure. 
 /// We also use it for symbol table and as parsing cache. 

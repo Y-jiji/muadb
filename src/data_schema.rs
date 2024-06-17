@@ -1,5 +1,5 @@
 use bytemuck::NoUninit;
-use crate::util_bytes::Bytes;
+use muadb_util::Bytes;
 
 #[macro_export]
 /// This macro declares all types in this data base system. 

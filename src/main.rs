@@ -1,20 +1,4 @@
 #![allow(unused)]
-
-// standalone modules
-mod util_bytes;
-mod util_logging;
-mod util_pratt_parser;
-
-// sql modules
-mod sql_parser_query;
-mod sql_parser_stmt;
-mod sql_parser_space;
-mod sql_parser_schema;
-mod sql_schema;
-mod sql_planner;
-mod sql_compiler;
-mod sql_error;
-
 // runtime modules
 mod rt_transaction;
 mod rt_executor;
@@ -39,7 +23,7 @@ mod op_collect_hashmap;
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
-    crate::util_logging::init();
+    muadb_util::init();
 }
 
 fn main() {

@@ -1,9 +1,10 @@
 [package]
-name = "muadb"
+name = "muadb-sql"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+muadb-util = { path = "../muadb-util" }
 auto_impl = "1.2.0"
 bumpalo = { version = "3.16.0", features = ["boxed", "collections", "serde", "std"] }
 bytemuck = "1.16.0"
