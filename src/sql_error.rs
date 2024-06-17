@@ -3,7 +3,7 @@ use crate::{sql_parser_space::SQLSpace, util_pratt_parser::*};
 // SQLError
 #[derive(Debug, Clone, Copy)]
 pub enum SQLError<'a> {
-    UndefinedSymbol(usize, &'a str),
+    UndefinedSymbol(usize /* offset */, &'a str /* expected */),
     Unknown,
     Visited,
     Merge(&'a SQLError<'a>, &'a SQLError<'a>)

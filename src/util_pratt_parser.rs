@@ -28,6 +28,7 @@ impl Visited for () {
 }
 
 // a general parser trait
+#[auto_impl::auto_impl(&, Box)]
 pub trait Parser<O, E, X>
     where
         X: Extra<O, E> + Clone, 
@@ -80,6 +81,13 @@ impl<O, E, X, P> Tag<O, E, X, P>
     pub fn new(inner: P) -> Self {
         Tag{inner, phantom: PhantomData}
     }
+    pub fn pad(self) -> Tag<O, E, X, Pad<O, E, X, P>> {
+        Tag{inner: Pad(self.inner, PhantomData), phantom: PhantomData}
+    }
+    pub fn erase(self) -> Tag<O, E, X, Box<dyn Parser<O, E, X> + 'static>> {
+        let inner: Box<dyn Parser<O, E, X> + 'static> = unsafe{ std::mem::transmute(Box::new(self.inner) as Box<dyn Parser<O, E, X>>) };
+        Tag { inner, phantom: PhantomData }
+    }
     pub fn out<Z, FUNC>(self, map: FUNC) -> Tag<Z, E, X, MapOut<O, E, X, P, Z, FUNC>>
         where X: Extra<Z, E>,
               Z: Clone,
@@ -93,7 +101,7 @@ impl<O, E, X, P> Tag<O, E, X, P>
     pub fn err<Z, FUNC>(self, map: FUNC) -> Tag<O, Z, X, MapErr<O, E, X, P, Z, FUNC>>
         where X: Extra<O, Z>,
               Z: Clone,
-              FUNC: Fn(&mut X, E) -> Z,
+              FUNC: Fn(&mut X, usize, E) -> Z,
     {
         Tag{
             inner: MapErr{map, inner: self.inner, phantom: PhantomData}, 
@@ -140,7 +148,24 @@ impl<OP, EP, OQ, EQ, X, P, Q> Parser<(OP, OQ), Either<EP, EQ>, X>  for Then<OP, 
         Ok((progress, (lhs, rhs)))
     }
 }
-impl<OP, EP, OQ, EQ, X, P, Q> Add<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
+impl<OP, OQ, E, X, P, Q> Add<Tag<OQ, E, X, Q>> for Tag<OP, E, X, P>
+    where 
+          X: Extra<(OP, OQ), Either<E, E>> + Extra<(OP, OQ), E>,
+          X: Extra<OP, E> + Extra<OQ, E>, 
+          P: Parser<OP, E, X>, 
+          Q: Parser<OQ, E, X>,
+          E: Clone, OP: Clone, OQ: Clone,
+{
+    type Output = Tag<(OP, OQ), E, X, MapErr<(OP, OQ), Either<E, E>, X, Then<OP, E, OQ, E, X, Tag<OP, E, X, P>, Tag<OQ, E, X, Q>>, E, for<'a> fn(&'a mut X, usize, Either<E, E>) -> E>>;
+    /// parse with self and rhs, merge the result
+    fn add(self, rhs: Tag<OQ, E, X, Q>) -> Self::Output {
+        fn map<'a, A, Z>(a: &'a mut A, _: usize, b: Either<Z, Z>) -> Z {
+            match b { Either::L(x) => x, Either::R(x) => x }
+        }
+        Tag::new(Then { lhs: self, rhs, phant: PhantomData }).err(map as for<'a> fn(&'a mut _, _, _) -> _)
+    }
+}
+impl<OP, EP, OQ, EQ, X, P, Q> Mul<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
     where 
           X: Extra<(OP, OQ), Either<EP, EQ>>,
           X: Extra<OP, EP> + Extra<OQ, EQ>, 
@@ -150,7 +175,7 @@ impl<OP, EP, OQ, EQ, X, P, Q> Add<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
           EP: Clone, EQ: Clone
 {
     type Output = Tag<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>>;
-    fn add(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
+    fn mul(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
         Tag::new(Then { lhs: self, rhs, phant: PhantomData })
     }
 }
@@ -165,7 +190,7 @@ where
     type Output = Tag<OQ, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OQ, fn(&mut X, (OP, OQ)) -> OQ>>;
     fn rem(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
         fn unwrap<X, OP, OQ>(extra: &mut X, (p, q): (OP, OQ)) -> OQ { q }
-        (self + rhs).out(unwrap)
+        (self * rhs).out(unwrap)
     }
 }
 impl<OP, EP, OQ, EQ, X, P, Q> Div<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P> 
@@ -179,10 +204,9 @@ where
     type Output = Tag<OP, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OP, fn(&mut X, (OP, OQ)) -> OP>>;
     fn div(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
         fn unwrap<X, OP, OQ>(extra: &mut X, (p, q): (OP, OQ)) -> OP { p }
-        (self + rhs).out(unwrap)
+        (self * rhs).out(unwrap)
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 pub struct Else<OP, EP, OQ, EQ, X, P, Q>
     where 
@@ -225,6 +249,7 @@ impl<OP, EP, OQ, EQ, X, P, Q> BitOr<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
           OP: Clone, OQ: Clone,
           EP: Clone, EQ: Clone
 {
+    /// parse with self, or fallback to rhs
     type Output = Tag<Either<OP, OQ>, (EP, EQ), X, Else<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>>;
     fn bitor(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
         Tag::new(Else { lhs: self, rhs, phant: PhantomData })
@@ -243,18 +268,20 @@ where
     O: Clone,
     E: MergeIn<X> + Clone,
 {
-    type Output = Tag<O, E, X, MapErr<O, (E, E), X, MapOut<Either<O, O>, (E, E), X, Else<O, E, O, E, X, Tag<O, E, X, P>, Tag<O, E, X, Q>>, O, for<'a> fn(&'a mut X, Either<O, O>) -> O>, E, for<'a> fn(&'a mut X, (E, E)) -> E>>;
+    type Output = Tag<O, E, X, MapErr<O, (E, E), X, MapOut<Either<O, O>, (E, E), X, Else<O, E, O, E, X, Tag<O, E, X, P>, Tag<O, E, X, Q>>, O, for<'a> fn(&'a mut X, Either<O, O>) -> O>, E, for<'a> fn(&'a mut X, usize, (E, E)) -> E>>;
+    /// parse with self, or fallback to rhs
+    /// when both self and rhs fail, we use MergeIn<X> trait to merge errors
     fn bitxor(self, rhs: Tag<O, E, X, Q>) -> Self::Output {
         fn map<'a, A, Z>(a: &'a mut A, b: Either<Z, Z>) -> Z {
             match b { Either::L(x) => x, Either::R(x) => x }
         }
-        fn err<'b, A, Z: MergeIn<A>>(a: &'b mut A, b: (Z, Z)) -> Z {
+        fn err<'b, A, Z: MergeIn<A>>(a: &'b mut A, _: usize, b: (Z, Z)) -> Z {
             b.0.merge(b.1, a)
         }
         // These length function signatures are necessary because rust cannot infer the for<'a> lifetime
         (self | rhs)
             .out(map as for<'a> fn(&'a mut _, _) -> _)
-            .err(err as for<'a> fn(&'a mut _, _) -> _)
+            .err(err as for<'a> fn(&'a mut _, _, _) -> _)
     }
 }
 
@@ -410,7 +437,7 @@ where
     O: Clone,
     E: Clone,
     Z: Clone,
-    FUNC: Fn(&mut X, E) -> Z,
+    FUNC: Fn(&mut X, usize, E) -> Z,
     X: Extra<O, E> + Extra<O, Z>
 {
     map: FUNC,
@@ -423,12 +450,12 @@ where
     O: Clone,
     E: Clone,
     Z: Clone,
-    FUNC: Fn(&mut X, E) -> Z,
+    FUNC: Fn(&mut X, usize, E) -> Z,
     X: Extra<O, E> + Extra<O, Z>
 {
     fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, O), (usize, Z)> {
         match self.inner.parse(input, progress, extra) {
-            Err((progress, err)) => Err((progress, (self.map)(extra, err))),
+            Err((progress, err)) => Err((progress, (self.map)(extra, progress, err))),
             Ok(o) => Ok(o),
         }
     }
@@ -462,18 +489,15 @@ impl<X> Parser<(), (), X> for Token<X>
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Pad<X>(PhantomData<X>);
-impl<X> Pad<X>
-    where X: Extra<(), ()>
+pub struct Pad<O, E, X, P>(P, PhantomData<(O, E, X)>);
+impl<O, E, X, P> Parser<O, E, X> for Pad<O, E, X, P>
+    where P: Parser<O, E, X>,
+          X: Extra<O, E> + Clone, 
+          O: Clone, 
+          E: Clone
+          
 {
-    pub fn new() -> Tag<(), (), X, Self> {
-        Tag::new(Pad(PhantomData))
-    }
-}
-impl<X> Parser<(), (), X> for Pad<X>
-    where X: Extra<(), ()>
-{
-    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, ()), (usize, ())> {
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, O), (usize, E)> {
         let mut cut = 0;
         let mut last = true;
         for (i, c) in input[progress..].char_indices() {
@@ -484,7 +508,20 @@ impl<X> Parser<(), (), X> for Pad<X>
         }
         if last { cut = input[progress..].len() }
         log::debug!("EAT SPACE={cut}");
-        Ok((progress + cut, ()))
+        // I know it is bad to copy a piece of code...
+        let progress = cut + progress;
+        let (progress, out) =self.0.parse(input, progress, extra)?;
+        let mut last = true;
+        for (i, c) in input[progress..].char_indices() {
+            cut = i;
+            if c.is_whitespace() { continue }
+            last = false;
+            break;
+        }
+        if last { cut = input[progress..].len() }
+        log::debug!("EAT SPACE={cut}");
+        let progress = cut + progress;
+        Ok((progress, out))
     }
 }
 
@@ -508,10 +545,10 @@ mod test {
         let parser = recurse::<i64, (), &Bump, _>(|this| {
             (a() + this.clone()).out(|extra, (lhs, rhs)| {
                 rhs + 20
-            }).err(|_, _| ())
+            })
             ^ 
             (b().out(|extra, _| 1))
-        }.err(|extra, _| ()));
+        }.err(|extra, _, _| ()));
         let example = "aaabb";
         let this = parser.parse(&example, 0, &mut &bump);
         assert!(61 == this.unwrap().1);
