@@ -247,20 +247,6 @@ where
     }
 }
 
-struct Helper<O, E, X> {
-    // pointer to external parser object
-    that: *const u8, 
-    // Safety: since parse don't mutate self, this Helper can be viewed as a Fn(...) -> ... object
-    parse: fn(*const u8, &str, usize, X) -> Result<(usize, O), (usize, E)>,
-    // destruct self
-    destruct: fn(*const u8)
-}
-impl<O, E, X> Drop for Helper<O, E, X> {
-    fn drop(&mut self) {
-        (self.destruct)(self.that);
-    }
-}
-
 pub struct Recursive<O, E, X> {
     this: Arc<OnceCell<Box<dyn Parser<O, E, X>>>>,
     tag: u64,
