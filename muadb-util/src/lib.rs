@@ -1,7 +1,7 @@
 mod bytes;
 mod logging;
-mod pratt_parser;
+mod packrat;
 
 pub use bytes::*;
 pub use logging::*;
-pub use pratt_parser::*;
+pub use packrat::*;
