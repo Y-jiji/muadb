@@ -20,6 +20,13 @@ pub trait Extra<O, E>: Clone
     fn replay(&self, progress: usize, tag: u64) -> Option<Result<(usize, O), (usize, E)>> { None }
 }
 
+pub trait Visited {
+    fn visited() -> Self;
+}
+impl Visited for () {
+    fn visited() -> Self { () }
+}
+
 // a general parser trait
 pub trait Parser<O, E, X>
     where
@@ -28,7 +35,6 @@ pub trait Parser<O, E, X>
         E: Clone
 {
     fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)>;
-    fn tag(&self) -> u64 { 0 }
 }
 
 #[derive(Debug)]
@@ -39,7 +45,7 @@ pub struct Tag<O, E, X, P>
         O: Clone, 
         E: Clone
 {
-    inner: P, tag: u64, 
+    inner: P, 
     phantom: PhantomData<(O, E, X)>
 }
 impl<O, E, X, P> Clone for Tag<O, E, X, P>
@@ -50,7 +56,7 @@ impl<O, E, X, P> Clone for Tag<O, E, X, P>
         E: Clone
 {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone(), tag: self.tag, phantom: PhantomData }
+        Self { inner: self.inner.clone(), phantom: PhantomData }
     }
 }
 impl<O, E, X, P> Parser<O, E, X> for Tag<O, E, X, P>
@@ -61,18 +67,8 @@ impl<O, E, X, P> Parser<O, E, X> for Tag<O, E, X, P>
         E: Clone
 {
     fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)> {
-        if self.tag() == 0 {
-            return self.inner.parse(input, progress, extra);
-        }
-        if let Some(result) = extra.replay(progress, self.tag) {
-            return result.clone();
-        }
-        extra.mark(progress, self.tag);
-        let result = self.inner.parse(input, progress, extra.clone());
-        extra.record(progress, self.tag, result.clone());
-        return result;
+        self.inner.parse(input, progress, extra.clone())
     }
-    fn tag(&self) -> u64 { self.tag }
 }
 impl<O, E, X, P> Tag<O, E, X, P>
     where
@@ -82,12 +78,7 @@ impl<O, E, X, P> Tag<O, E, X, P>
         E: Clone
 {
     pub fn new(inner: P) -> Self {
-        static COUNT: AtomicU64 = AtomicU64::new(1);
-        use std::sync::atomic::Ordering::SeqCst;
-        let tag = if inner.tag() != 0 { 0 } else {
-            COUNT.fetch_add(1, SeqCst)
-        };
-        Tag{inner, tag, phantom: PhantomData}
+        Tag{inner, phantom: PhantomData}
     }
     pub fn out<Z, FUNC>(self, map: FUNC) -> Tag<Z, E, X, MapOut<O, E, X, P, Z, FUNC>>
         where X: Extra<Z, E>,
@@ -96,7 +87,7 @@ impl<O, E, X, P> Tag<O, E, X, P>
     {
         Tag{
             inner: MapOut{map, inner: self.inner, phantom: PhantomData}, 
-            tag:self.tag, phantom: PhantomData
+            phantom: PhantomData
         }
     }
     pub fn err<Z, FUNC>(self, map: FUNC) -> Tag<O, Z, X, MapErr<O, E, X, P, Z, FUNC>>
@@ -106,7 +97,7 @@ impl<O, E, X, P> Tag<O, E, X, P>
     {
         Tag{
             inner: MapErr{map, inner: self.inner, phantom: PhantomData}, 
-            tag:self.tag, phantom: PhantomData
+            phantom: PhantomData
         }
     }
 }
@@ -270,35 +261,35 @@ impl<O, E, X> Drop for Helper<O, E, X> {
     }
 }
 
-pub struct Recursive<O, E, X>(Arc<OnceCell<Helper<O, E, X>>>);
+pub struct Recursive<O, E, X> {
+    this: Arc<OnceCell<Box<dyn Parser<O, E, X>>>>,
+    tag: u64,
+}
 impl<O, E, X> Parser<O, E, X> for Recursive<O, E, X> 
     where
         X: Extra<O, E> + Clone, 
         O: Clone, 
-        E: Clone
+        E: Clone + Visited
 {
     fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)> {
-        let this = self.clone();
-        let Helper{that, parse, ..} = this.0.as_ref().get().unwrap();
-        parse(*that, input, progress, extra)
+        self.this.get().expect("UNINITIALIZED RECURSIVE PARSER").parse(input, progress, extra)
     }
 }
 pub fn recurse<O, E, X, P>(builder: impl FnOnce(Tag<O, E, X, Recursive<O, E, X>>) -> P) -> Tag<O, E, X, Recursive<O, E, X>>
 where
     X: Extra<O, E> + Clone, 
     O: Clone, 
-    E: Clone,
+    E: Clone + Visited,
     P: Parser<O, E, X>
 {
-    let this: Tag<O, E, X, Recursive<O, E, X>> = Tag::new(Recursive(Arc::new(OnceCell::new())));
-    let that = Box::leak(Box::new(Tag::new(builder(this.clone())))) as *const _ as *const u8;
-    // make sure this "leak" operation is legit
-    assert!(std::mem::size_of::<&mut Tag<O, E, X, P>>() == std::mem::size_of::<*const u8>());
-    // cast parse and destruct function
-    let parse = unsafe {std::mem::transmute(Tag::<O, E, X, P>::parse as fn(_, _, _, _) -> _)};
-    let destruct = unsafe {std::mem::transmute::<_, fn(*const u8)>(drop::<Box<Tag::<O, E, X, P>>> as fn(_) -> _)};
-    // set self to be inner function
-    this.inner.0.as_ref().set(Helper{that, parse, destruct});
+    static COUNT: AtomicU64 = AtomicU64::new(1);
+    use std::sync::atomic::Ordering::SeqCst;
+    let tag = COUNT.fetch_add(1, SeqCst);
+    let this: Tag<O, E, X, Recursive<O, E, X>> = Tag::new(Recursive{
+        tag, this: Arc::new(OnceCell::new())
+    });
+    let that = Box::new(Tag::new(builder(this.clone())));
+    this.inner.this.as_ref().set(unsafe{ std::mem::transmute(that as Box<dyn Parser<O, E, X>>) });
     return this;
 }
 impl<O, E, X> std::fmt::Debug for Recursive<O, E, X> 
@@ -307,12 +298,15 @@ impl<O, E, X> std::fmt::Debug for Recursive<O, E, X>
           E: Clone
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Recursive(inner: {:?})", &self.0 as *const _)
+        writeln!(f, "Recursive(tag: {})", &self.tag)
     }
 }
 impl<O, E, X> Clone for Recursive<O, E, X> {
     fn clone(&self) -> Self {
-        Recursive(Arc::clone(&self.0))
+        Recursive{
+            this: Arc::clone(&self.this),
+            tag: self.tag
+        }
     }
 }
 

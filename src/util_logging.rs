@@ -5,10 +5,12 @@ use Level::*;
 use colored::Colorize;
 
 static LV: LevelFilter = LevelFilter::Debug;
+const LOG_TO_STD_IN: bool = true;
 
 pub struct StaticLogger(Mutex<std::io::Stderr>);
 impl Log for StaticLogger {
     fn flush(&self) {
+        if LOG_TO_STD_IN { return; }
         loop {
             self.0.clear_poison();
             if let Ok(_) = self.0.try_lock().map(|mut lock| {
@@ -31,6 +33,9 @@ impl Log for StaticLogger {
         }.bold();
         let file = record.file_static().unwrap_or("");
         let n = 30-file.len();
+        if LOG_TO_STD_IN {
+            return println!("{mark:<8}{file}:{:<n$} {}", record.line().unwrap_or(0), record.args())
+        }
         loop {
             self.0.clear_poison();
             if let Ok(_) = self.0.try_lock().map(|mut lock| {

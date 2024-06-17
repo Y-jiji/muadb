@@ -1,4 +1,4 @@
-use crate::{sql_parser_expr::SQLError, sql_parser_space::SQLSpace, util_pratt_parser::*};
+use crate::{sql_error::SQLError, sql_parser_space::SQLSpace, util_pratt_parser::*};
 use bumpalo::collections::Vec as BVec;
 
 // SQLSchema

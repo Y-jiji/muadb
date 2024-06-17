@@ -12,6 +12,7 @@ mod sql_parser_space;
 mod sql_schema;
 mod sql_planner;
 mod sql_compiler;
+mod sql_error;
 
 // runtime modules
 mod rt_transaction;
