@@ -230,20 +230,31 @@ impl<OP, EP, OQ, EQ, X, P, Q> BitOr<Tag<OQ, EQ, X, Q>> for Tag<OP, EP, X, P>
         Tag::new(Else { lhs: self, rhs, phant: PhantomData })
     }
 }
-impl<O, EP, EQ, X, P, Q> BitXor<Tag<O, EQ, X, Q>> for Tag<O, EP, X, P>
+
+pub trait MergeIn<X> {
+    fn merge(self, with: Self, x: &mut X) -> Self;
+}
+
+impl<O, E, X, P, Q> BitXor<Tag<O, E, X, Q>> for Tag<O, E, X, P>
 where 
-    X: Extra<Either<O, O>, (EP, EQ)> + Extra<O, (EP, EQ)> + Extra<O, EP> + Extra<O, EQ>, 
-    P: Parser<O, EP, X>, 
-    Q: Parser<O, EQ, X>,
+    X: Extra<O, (E, E)> + Extra<O, E> + Extra<Either<O, O>, (E, E)>, 
+    P: Parser<O, E, X>, 
+    Q: Parser<O, E, X>,
     O: Clone,
-    EP: Clone, EQ: Clone
+    E: MergeIn<X> + Clone,
 {
-    type Output = Tag<O, (EP, EQ), X, MapOut<Either<O, O>, (EP, EQ), X, Else<O, EP, O, EQ, X, Tag<O, EP, X, P>, Tag<O, EQ, X, Q>>, O, fn(&mut X, Either<O, O>) -> O>>;
-    fn bitxor(self, rhs: Tag<O, EQ, X, Q>) -> Self::Output {
-        fn map<A, Z>(a: &mut A, b: Either<Z, Z>) -> Z {
+    type Output = Tag<O, E, X, MapErr<O, (E, E), X, MapOut<Either<O, O>, (E, E), X, Else<O, E, O, E, X, Tag<O, E, X, P>, Tag<O, E, X, Q>>, O, for<'a> fn(&'a mut X, Either<O, O>) -> O>, E, for<'a> fn(&'a mut X, (E, E)) -> E>>;
+    fn bitxor(self, rhs: Tag<O, E, X, Q>) -> Self::Output {
+        fn map<'a, A, Z>(a: &'a mut A, b: Either<Z, Z>) -> Z {
             match b { Either::L(x) => x, Either::R(x) => x }
         }
-        (self | rhs).out(map)
+        fn err<'b, A, Z: MergeIn<A>>(a: &'b mut A, b: (Z, Z)) -> Z {
+            b.0.merge(b.1, a)
+        }
+        // These length function signatures are necessary because rust cannot infer the for<'a> lifetime
+        (self | rhs)
+            .out(map as for<'a> fn(&'a mut _, _) -> _)
+            .err(err as for<'a> fn(&'a mut _, _) -> _)
     }
 }
 
@@ -483,6 +494,9 @@ mod test {
     use bumpalo::Bump;
 
     impl<'a, O: Clone + 'a, E: Clone + 'a> Extra<O, E> for &'a Bump {}
+    impl<'a> MergeIn<&'a Bump> for () {
+        fn merge(self, with: Self, x: &mut &'a Bump) -> Self { () }
+    }
 
     #[test]
     fn alphabet() {
@@ -494,7 +508,7 @@ mod test {
         let parser = recurse::<i64, (), &Bump, _>(|this| {
             (a() + this.clone()).out(|extra, (lhs, rhs)| {
                 rhs + 20
-            })
+            }).err(|_, _| ())
             ^ 
             (b().out(|extra, _| 1))
         }.err(|extra, _| ()));
