@@ -13,7 +13,7 @@ pub trait Extra<O, E>: Clone
         E: Clone
 {
     // mark a progress is visited by a parser
-    fn mark(&self, progress: usize, tag: u64) { }
+    fn mark(&self, progress: usize, tag: u64) -> bool { false }
     // record execution result
     fn record(&self, progress: usize, tag: u64, result: Result<(usize, O), (usize, E)>)   {  }
     // replay an expression
@@ -34,7 +34,7 @@ pub trait Parser<O, E, X>
         O: Clone, 
         E: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)>;
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, O), (usize, E)>;
 }
 
 #[derive(Debug)]
@@ -66,8 +66,8 @@ impl<O, E, X, P> Parser<O, E, X> for Tag<O, E, X, P>
         O: Clone, 
         E: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)> {
-        self.inner.parse(input, progress, extra.clone())
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, O), (usize, E)> {
+        self.inner.parse(input, progress, extra)
     }
 }
 impl<O, E, X, P> Tag<O, E, X, P>
@@ -83,7 +83,7 @@ impl<O, E, X, P> Tag<O, E, X, P>
     pub fn out<Z, FUNC>(self, map: FUNC) -> Tag<Z, E, X, MapOut<O, E, X, P, Z, FUNC>>
         where X: Extra<Z, E>,
               Z: Clone,
-              FUNC: Fn(X, O) -> Z,
+              FUNC: Fn(&mut X, O) -> Z,
     {
         Tag{
             inner: MapOut{map, inner: self.inner, phantom: PhantomData}, 
@@ -93,7 +93,7 @@ impl<O, E, X, P> Tag<O, E, X, P>
     pub fn err<Z, FUNC>(self, map: FUNC) -> Tag<O, Z, X, MapErr<O, E, X, P, Z, FUNC>>
         where X: Extra<O, Z>,
               Z: Clone,
-              FUNC: Fn(X, E) -> Z,
+              FUNC: Fn(&mut X, E) -> Z,
     {
         Tag{
             inner: MapErr{map, inner: self.inner, phantom: PhantomData}, 
@@ -127,13 +127,13 @@ impl<OP, EP, OQ, EQ, X, P, Q> Parser<(OP, OQ), Either<EP, EQ>, X>  for Then<OP, 
         OP: Clone, OQ: Clone,
         EP: Clone, EQ: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, (OP, OQ)), (usize, Either<EP, EQ>)> {
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, (OP, OQ)), (usize, Either<EP, EQ>)> {
         let start = progress;
-        let (progress, lhs) = match Parser::parse(&self.lhs, input, progress, extra.clone()) {
+        let (progress, lhs) = match Parser::parse(&self.lhs, input, progress, extra) {
             Ok((progress, lhs)) => (progress, lhs),
             Err((progress, err)) => return Err((start, Either::L(err)))
         };
-        let (progress, rhs) = match Parser::parse(&self.rhs, input, progress, extra.clone()) {
+        let (progress, rhs) = match Parser::parse(&self.rhs, input, progress, extra) {
             Ok((progress, rhs)) => (progress, rhs),
             Err((progress, err)) => return Err((start, Either::R(err)))
         };
@@ -162,9 +162,9 @@ where
       OP: Clone, OQ: Clone,
       EP: Clone, EQ: Clone
 {
-    type Output = Tag<OQ, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OQ, fn(X, (OP, OQ)) -> OQ>>;
+    type Output = Tag<OQ, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OQ, fn(&mut X, (OP, OQ)) -> OQ>>;
     fn rem(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
-        fn unwrap<X, OP, OQ>(extra: X, (p, q): (OP, OQ)) -> OQ { q }
+        fn unwrap<X, OP, OQ>(extra: &mut X, (p, q): (OP, OQ)) -> OQ { q }
         (self + rhs).out(unwrap)
     }
 }
@@ -176,9 +176,9 @@ where
       OP: Clone, OQ: Clone,
       EP: Clone, EQ: Clone
 {
-    type Output = Tag<OP, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OP, fn(X, (OP, OQ)) -> OP>>;
+    type Output = Tag<OP, Either<EP, EQ>, X, MapOut<(OP, OQ), Either<EP, EQ>, X, Then<OP, EP, OQ, EQ, X, Tag<OP, EP, X, P>, Tag<OQ, EQ, X, Q>>, OP, fn(&mut X, (OP, OQ)) -> OP>>;
     fn div(self, rhs: Tag<OQ, EQ, X, Q>) -> Self::Output {
-        fn unwrap<X, OP, OQ>(extra: X, (p, q): (OP, OQ)) -> OP { p }
+        fn unwrap<X, OP, OQ>(extra: &mut X, (p, q): (OP, OQ)) -> OP { p }
         (self + rhs).out(unwrap)
     }
 }
@@ -204,13 +204,13 @@ impl<OP, EP, OQ, EQ, X, P, Q> Parser<Either<OP, OQ>, (EP, EQ), X> for Else<OP, E
           OP: Clone, OQ: Clone,
           EP: Clone, EQ: Clone
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, Either<OP, OQ>), (usize, (EP, EQ))> {
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, Either<OP, OQ>), (usize, (EP, EQ))> {
         let start = progress;
-        let (progress, lhs) = match Parser::parse(&self.lhs, input, progress, extra.clone()) {
+        let (progress, lhs) = match Parser::parse(&self.lhs, input, progress, extra) {
             Err((progress, lhs)) => (start, lhs),
             Ok((progress, err)) => return Ok((progress, Either::L(err)))
         };
-        let (progress, rhs) = match Parser::parse(&self.rhs, input, progress, extra.clone()) {
+        let (progress, rhs) = match Parser::parse(&self.rhs, input, progress, extra) {
             Err((progress, rhs)) => (start, rhs),
             Ok((progress, err)) => return Ok((progress, Either::R(err)))
         };
@@ -238,9 +238,9 @@ where
     O: Clone,
     EP: Clone, EQ: Clone
 {
-    type Output = Tag<O, (EP, EQ), X, MapOut<Either<O, O>, (EP, EQ), X, Else<O, EP, O, EQ, X, Tag<O, EP, X, P>, Tag<O, EQ, X, Q>>, O, fn( X,  Either< O,  O>) -> O>>;
+    type Output = Tag<O, (EP, EQ), X, MapOut<Either<O, O>, (EP, EQ), X, Else<O, EP, O, EQ, X, Tag<O, EP, X, P>, Tag<O, EQ, X, Q>>, O, fn(&mut X, Either<O, O>) -> O>>;
     fn bitxor(self, rhs: Tag<O, EQ, X, Q>) -> Self::Output {
-        fn map<A, Z>(a: A, b: Either<Z, Z>) -> Z {
+        fn map<A, Z>(a: &mut A, b: Either<Z, Z>) -> Z {
             match b { Either::L(x) => x, Either::R(x) => x }
         }
         (self | rhs).out(map)
@@ -257,8 +257,12 @@ impl<O, E, X> Parser<O, E, X> for Recursive<O, E, X>
         O: Clone, 
         E: Clone + Visited
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, E)> {
-        self.this.get().expect("UNINITIALIZED RECURSIVE PARSER").parse(input, progress, extra)
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, O), (usize, E)> {
+        if let Some(result) = extra.replay(progress, self.tag) { return result }
+        if extra.mark(progress, self.tag) { Err((progress, E::visited()))? }
+        let result = self.this.get().expect("UNINITIALIZED RECURSIVE PARSER").parse(input, progress, extra);
+        extra.record(progress, self.tag, result.clone());
+        return result;
     }
 }
 pub fn recurse<O, E, X, P>(builder: impl FnOnce(Tag<O, E, X, Recursive<O, E, X>>) -> P) -> Tag<O, E, X, Recursive<O, E, X>>
@@ -302,8 +306,8 @@ pub struct Repeat<O, E, X, P, Z, INIT, FOLD>
           O: Clone, 
           E: Clone,
           Z: Clone,
-          FOLD: Fn(X, Z, O) -> Z,
-          INIT: Fn(X) -> Z,
+          FOLD: Fn(&mut X, Z, O) -> Z,
+          INIT: Fn(&mut X) -> Z,
           X: Extra<O, E> + Extra<Z, E>,
 {
     inner: P,
@@ -317,15 +321,15 @@ impl<O, E, X, P, Z, INIT, FOLD> Parser<Z, E, X> for Repeat<O, E, X, P, Z, INIT, 
         O: Clone, 
         E: Clone,
         Z: Clone,
-        FOLD: Fn(X, Z, O) -> Z,
-        INIT: Fn(X) -> Z,
+        FOLD: Fn(&mut X, Z, O) -> Z,
+        INIT: Fn(&mut X) -> Z,
         X: Extra<O, E> + Extra<Z, E> + Clone,
 {
-    fn parse(&self, input: &str, mut progress: usize, extra: X) -> Result<(usize, Z), (usize, E)> {
-        let mut ini = (self.init)(extra.clone());
+    fn parse(&self, input: &str, mut progress: usize, extra: &mut X) -> Result<(usize, Z), (usize, E)> {
+        let mut ini = (self.init)(extra);
         loop {
-            let (progress_new, out) = match self.inner.parse(input, progress, extra.clone()) {
-                Ok((progress, out)) => (progress, (self.fold)(extra.clone(), ini, out)),
+            let (progress_new, out) = match self.inner.parse(input, progress, extra) {
+                Ok((progress, out)) => (progress, (self.fold)(extra, ini, out)),
                 Err(e) => return Ok((progress, ini)),
             };
             progress = progress_new;
@@ -339,8 +343,8 @@ impl<O, E, X, P, Z, INIT, FOLD> Shr<(INIT, FOLD)> for Tag<O, E, X, P>
         O: Clone, 
         E: Clone,
         Z: Clone,
-        FOLD: Fn(X, Z, O) -> Z,
-        INIT: Fn(X) -> Z,
+        FOLD: Fn(&mut X, Z, O) -> Z,
+        INIT: Fn(&mut X) -> Z,
         X: Extra<O, E> + Extra<Z, E> + Clone,
 {
     type Output = Tag<Z, E, X, Repeat<O, E, X, Tag<O, E, X, P>, Z, INIT, FOLD>>;
@@ -360,7 +364,7 @@ where
     O: Clone,
     E: Clone,
     Z: Clone,
-    FUNC: Fn(X, O) -> Z,
+    FUNC: Fn(&mut X, O) -> Z,
     X: Extra<O, E> + Extra<Z, E>
 {
     map: FUNC,
@@ -373,11 +377,11 @@ where
     O: Clone,
     E: Clone,
     Z: Clone,
-    FUNC: Fn(X, O) -> Z,
+    FUNC: Fn(&mut X, O) -> Z,
     X: Extra<O, E> + Extra<Z, E>
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, Z), (usize, E)> {
-        match self.inner.parse(input, progress, extra.clone()) {
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, Z), (usize, E)> {
+        match self.inner.parse(input, progress, extra) {
             Ok((progress, out)) => Ok((progress, (self.map)(extra, out))),
             Err(e) => Err(e),
         }
@@ -391,7 +395,7 @@ where
     O: Clone,
     E: Clone,
     Z: Clone,
-    FUNC: Fn(X, E) -> Z,
+    FUNC: Fn(&mut X, E) -> Z,
     X: Extra<O, E> + Extra<O, Z>
 {
     map: FUNC,
@@ -404,12 +408,12 @@ where
     O: Clone,
     E: Clone,
     Z: Clone,
-    FUNC: Fn(X, E) -> Z,
+    FUNC: Fn(&mut X, E) -> Z,
     X: Extra<O, E> + Extra<O, Z>
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, O), (usize, Z)> {
-        match self.inner.parse(input, progress, extra.clone()) {
-            Err((progress, err)) => Err((progress, (self.map)(extra.clone(), err))),
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, O), (usize, Z)> {
+        match self.inner.parse(input, progress, extra) {
+            Err((progress, err)) => Err((progress, (self.map)(extra, err))),
             Ok(o) => Ok(o),
         }
     }
@@ -430,7 +434,7 @@ impl<X> Token<X>
 impl<X> Parser<(), (), X> for Token<X>
     where X: Extra<(), ()>
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, ()), (usize, ())> {
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, ()), (usize, ())> {
         if input[progress..].starts_with(self.token) {
             log::debug!("TOKEN={:?} MATCHED", self.token);
             Ok((progress + self.token.len(), ()))
@@ -454,7 +458,7 @@ impl<X> Pad<X>
 impl<X> Parser<(), (), X> for Pad<X>
     where X: Extra<(), ()>
 {
-    fn parse(&self, input: &str, progress: usize, extra: X) -> Result<(usize, ()), (usize, ())> {
+    fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, ()), (usize, ())> {
         let mut cut = 0;
         let mut last = true;
         for (i, c) in input[progress..].char_indices() {
@@ -488,10 +492,10 @@ mod test {
                 rhs + 20
             })
             ^ 
-            (b().out(|extra: &Bump, _| 1))
+            (b().out(|extra, _| 1))
         }.err(|extra, _| ()));
         let example = "aaabb";
-        let this = parser.parse(&example, 0, &bump);
+        let this = parser.parse(&example, 0, &mut &bump);
         assert!(61 == this.unwrap().1);
     }
 }

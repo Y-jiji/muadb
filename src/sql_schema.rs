@@ -22,12 +22,12 @@ type SQLRec<'a> = Recursive<SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>>;
 pub fn sql_parser_schema<'a>() -> impl Parser<SQLSchema<'a>, SQLError<'a>, SQLSpace<'a>> {
     recurse(|this| {
         let tuple = (this / (Pad::new() / Token::new(",") / Pad::new())) >> (
-            |extra: SQLSpace<'a>| BVec::with_capacity_in(5, extra.bump),
-            |extra: SQLSpace<'a>, mut collector: BVec<'a, _>, another: SQLSchema<'a>| { collector.push(another); collector }
+            |extra: &mut SQLSpace<'a>| BVec::with_capacity_in(5, extra.bump),
+            |extra: &mut SQLSpace<'a>, mut collector: BVec<'a, _>, another: SQLSchema<'a>| { collector.push(another); collector }
         );
         let tuple = Token::new("(") % (tuple / Token::new(")"));
         let tuple = tuple.out(|extra, tuple| SQLSchema::Tuple { tuple });
-        let i64 = Token::new("i64").out(|extra: SQLSpace<'a>, _| SQLSchema::I64);
+        let i64 = Token::new("i64").out(|extra: &mut SQLSpace<'a>, _| SQLSchema::I64);
         (Pad::new()%(tuple ^ i64)/Pad::new()).err(|extra, _| SQLError::Unknown)
     })
 }
@@ -41,8 +41,8 @@ mod test {
     fn parse_tuple() {
         let input = "( i64 , )";
         let bump = Bump::new();
-        let space = SQLSpace::new(&bump, input);
+        let mut space = SQLSpace::new(&bump, input);
         let parser = sql_parser_schema();
-        println!("{:?}", parser.parse(input, 0, space));
+        println!("{:?}", parser.parse(input, 0, &mut space));
     }
 }

@@ -18,10 +18,15 @@ fn check(x: u64) -> u16 {
 }
 
 impl<'a, O: Debug + Clone, E: Debug + Clone> Extra<O, E> for SQLSpace<'a> {
-    fn mark(&self, progress: usize, tag: u64) {
+    fn mark(&self, progress: usize, tag: u64) -> bool {
         log::debug!("TAG={tag:<3} PROGRESS={progress:<4} MARK");
+        for (i, x) in self.tag_slice.borrow()[progress].iter().rev().enumerate() {
+            if *x != check(tag) { continue }
+            return true
+        }
         self.tag_slice.borrow_mut()[progress].push(check(tag));
         self.res_slice.borrow_mut()[progress].push(None);
+        return false
     }
     fn record(&self, progress: usize, tag: u64, result: Result<(usize, O), (usize, E)>) {
         // Safety: allocation is managed by bumpalo (without *external heap allocation*)
