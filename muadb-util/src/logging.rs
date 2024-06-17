@@ -1,7 +1,6 @@
-use std::{collections::HashMap, io::Write, sync::{atomic::AtomicBool, Mutex, OnceLock}};
+use std::{io::Write, sync::{Mutex, OnceLock}};
 
 use log::*;
-use Level::*;
 use colored::Colorize;
 
 static LV: LevelFilter = LevelFilter::Debug;
@@ -19,7 +18,7 @@ impl Log for StaticLogger {
         }
     }
     fn enabled(&self, metadata: &Metadata) -> bool {
-        return true;
+        true
     }
     fn log(&self, record: &Record) {
         use std::io::Write;
@@ -48,5 +47,5 @@ impl Log for StaticLogger {
 pub fn init() -> Result<(), SetLoggerError> {
     static STATICLOGGER: OnceLock<StaticLogger> = OnceLock::new();
     log::set_logger(STATICLOGGER.get_or_init(|| StaticLogger(Mutex::new(std::io::stderr()))))
-        .map(|()| log::set_max_level(LV.into()))
+        .map(|()| log::set_max_level(LV))
 }

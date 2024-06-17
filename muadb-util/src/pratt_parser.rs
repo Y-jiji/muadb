@@ -4,7 +4,7 @@
 
 //! TODO: record only on recursive entry points (implement an alternative tagging strategy)
 
-use std::{any::Any, cell::OnceCell, fmt::Debug, marker::PhantomData, ops::{Add, BitAnd, BitOr, BitXor, Index, Mul, Range, Rem, Shr, Div}, os::unix::process, sync::{atomic::AtomicU64, Arc}};
+use std::{cell::OnceCell, fmt::Debug, marker::PhantomData, ops::{Add, BitOr, BitXor, Mul, Rem, Shr, Div}, sync::{atomic::AtomicU64, Arc}};
 
 // memorization buffer + output/error allocation buffer
 pub trait Extra<O, E>: Clone 
@@ -22,7 +22,7 @@ pub trait Visited {
     fn visited() -> Self;
 }
 impl Visited for () {
-    fn visited() -> Self { () }
+    fn visited() -> Self {  }
 }
 
 // a general parser trait
@@ -163,7 +163,7 @@ impl<OP, OQ, E, X, P, Q> Add<Tag<OQ, E, X, Q>> for Tag<OP, E, X, P>
     type Output = Tag<(OP, OQ), E, X, MapErr<(OP, OQ), Either<E, E>, X, Then<OP, E, OQ, E, X, Tag<OP, E, X, P>, Tag<OQ, E, X, Q>>, E, for<'a> fn(&'a mut X, usize, Either<E, E>) -> E>>;
     /// parse with self and rhs, merge the result
     fn add(self, rhs: Tag<OQ, E, X, Q>) -> Self::Output {
-        fn map<'a, A, Z>(a: &'a mut A, _: usize, b: Either<Z, Z>) -> Z {
+        fn map<A, Z>(a: &mut A, _: usize, b: Either<Z, Z>) -> Z {
             match b { Either::L(x) => x, Either::R(x) => x }
         }
         Tag::new(Then { lhs: self, rhs, phant: PhantomData }).err(map as for<'a> fn(&'a mut _, _, _) -> _)
@@ -279,10 +279,10 @@ where
     /// parse with self, or fallback to rhs
     /// when both self and rhs fail, we use MergeIn<X> trait to merge errors
     fn bitxor(self, rhs: Tag<O, E, X, Q>) -> Self::Output {
-        fn map<'a, A, Z>(a: &'a mut A, b: Either<Z, Z>) -> Z {
+        fn map<A, Z>(a: &mut A, b: Either<Z, Z>) -> Z {
             match b { Either::L(x) => x, Either::R(x) => x }
         }
-        fn err<'b, A, Z: MergeIn<A>>(a: &'b mut A, _: usize, b: (Z, Z)) -> Z {
+        fn err<A, Z: MergeIn<A>>(a: &mut A, _: usize, b: (Z, Z)) -> Z {
             b.0.merge(b.1, a)
         }
         // These length function signatures are necessary because rust cannot infer the for<'a> lifetime
@@ -310,7 +310,7 @@ impl<O, E, X> Parser<O, E, X> for Recursive<O, E, X>
         let result = 
             self.this.get().expect("UNINITIALIZED RECURSIVE PARSER").parse(input, progress, extra);
         extra.record(progress, self.tag, result.clone());
-        return result;
+        result
     }
 }
 pub fn recurse<O, E, X, P>(builder: impl FnOnce(Tag<O, E, X, Recursive<O, E, X>>) -> P) -> Tag<O, E, X, Recursive<O, E, X>>
@@ -330,7 +330,7 @@ where
     let that = Box::new(Tag::new(builder(this.clone())));
     // UNSAFE HERE
     this.inner.this.as_ref().set(unsafe{ std::mem::transmute(that as Box<dyn Parser<O, E, X>>) });
-    return this;
+    this
 }
 impl<O, E, X> std::fmt::Debug for Recursive<O, E, X> 
     where X: Extra<O, E>,
@@ -540,7 +540,7 @@ mod test {
 
     impl<'a, O: Clone + 'a, E: Clone + 'a> Extra<O, E> for &'a Bump {}
     impl<'a> MergeIn<&'a Bump> for () {
-        fn merge(self, with: Self, x: &mut &'a Bump) -> Self { () }
+        fn merge(self, with: Self, x: &mut &'a Bump) -> Self {  }
     }
 
     #[test]
@@ -549,7 +549,7 @@ mod test {
         let a = || Token::new("a");
         let b = || Token::new("b");
         fn take_left<A, B, C>(_: C, (a, b): (A, B)) -> A { a }
-        fn unwrap<A, B, C>(_: C, a: Either<A, B>) -> () { () }
+        fn unwrap<A, B, C>(_: C, a: Either<A, B>) {  }
         let parser = recurse::<i64, (), &Bump, _>(|this| {
             (a() + this.clone()).out(|extra, (lhs, rhs)| {
                 rhs + 20
@@ -558,7 +558,7 @@ mod test {
             (b().out(|extra, _| 1))
         }.err(|extra, _, _| ()));
         let example = "aaabb";
-        let this = parser.parse(&example, 0, &mut &bump);
+        let this = parser.parse(example, 0, &mut &bump);
         assert!(61 == this.unwrap().1);
     }
 }

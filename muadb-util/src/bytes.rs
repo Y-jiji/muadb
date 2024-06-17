@@ -100,7 +100,7 @@ impl Bytes {
         }
     }
     pub fn filled(len: usize, byte: u8) -> Self {
-        let layout = Layout::from_size_align(HEAD + (len + ALIGN - 1) & !(ALIGN - 1), ALIGN).unwrap();
+        let layout = Layout::from_size_align((HEAD + (len + ALIGN - 1)) & !(ALIGN - 1), ALIGN).unwrap();
         println!("{layout:?}");
         unsafe {
             let ptr = std::alloc::alloc(layout);
