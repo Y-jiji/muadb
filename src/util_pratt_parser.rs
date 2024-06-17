@@ -12,8 +12,6 @@ pub trait Extra<O, E>: Clone
         O: Clone,
         E: Clone
 {
-    // mark a progress is visited by a parser
-    fn mark(&self, progress: usize, tag: u64) -> bool { false }
     // record execution result
     fn record(&self, progress: usize, tag: u64, result: Result<(usize, O), (usize, E)>)   {  }
     // replay an expression
@@ -294,6 +292,8 @@ where
     }
 }
 
+static COUNT: AtomicU64 = AtomicU64::new(1);
+use std::sync::atomic::Ordering::SeqCst;
 pub struct Recursive<O, E, X> {
     this: Arc<OnceCell<Box<dyn Parser<O, E, X>>>>,
     tag: u64,
@@ -305,9 +305,10 @@ impl<O, E, X> Parser<O, E, X> for Recursive<O, E, X>
         E: Clone + Visited
 {
     fn parse(&self, input: &str, progress: usize, extra: &mut X) -> Result<(usize, O), (usize, E)> {
+        log::debug!("{}", &input[progress..]);
         if let Some(result) = extra.replay(progress, self.tag) { return result }
-        if extra.mark(progress, self.tag) { Err((progress, E::visited()))? }
-        let result = self.this.get().expect("UNINITIALIZED RECURSIVE PARSER").parse(input, progress, extra);
+        let result = 
+            self.this.get().expect("UNINITIALIZED RECURSIVE PARSER").parse(input, progress, extra);
         extra.record(progress, self.tag, result.clone());
         return result;
     }
@@ -322,8 +323,6 @@ where
     //! Safety: types that implements Parser<O, E, X> are constitutes functions (input, X) -> Result<(O, usize), (E, usize)>
     //! Therefore, if X, O, E don't change, the function signature don't change. 
     //! Therefore, we don't require X, O, E to have 'static lifetime. 
-    static COUNT: AtomicU64 = AtomicU64::new(1);
-    use std::sync::atomic::Ordering::SeqCst;
     let tag = COUNT.fetch_add(1, SeqCst);
     let this: Tag<O, E, X, Recursive<O, E, X>> = Tag::new(Recursive{
         tag, this: Arc::new(OnceCell::new())
