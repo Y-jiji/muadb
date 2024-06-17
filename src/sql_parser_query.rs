@@ -1,24 +1,25 @@
 use crate::sql_schema::*;
 
 // In general, only expressions get compiled to physical operators
-pub enum SQLExpr<'a> {
+pub enum SQLQuery<'a> {
     // SELECT * FROM <table> WHERE <filter>
     Select {
-        table:  &'a SQLExpr<'a>,
-        filter: &'a SQLExpr<'a>,
+        table:  &'a SQLQuery<'a>,
+        filter: &'a SQLQuery<'a>,
     },
     // SELECT 0,3,2,1 FROM <table>
     // <table>.<column>
     Project {
-        table:   &'a SQLExpr<'a>,
+        table:   &'a SQLQuery<'a>,
         columns: &'a [usize],
     },
     // JOIN <lhs>, <rhs> ON <filter>
+    // [INNER] JOIN <lhs>, <rhs> ON <filter>
     Join {
-        lhs:    &'a SQLExpr<'a>,
-        rhs:    &'a SQLExpr<'a>,
+        lhs:    &'a SQLQuery<'a>,
+        rhs:    &'a SQLQuery<'a>,
         dir:    SQLJoinMethod,
-        filter: &'a SQLExpr<'a>,
+        filter: &'a SQLQuery<'a>,
     },
     // <table> -- a table's name
     Name {
@@ -40,4 +41,9 @@ pub enum SQLExpr<'a> {
 
 // JOIN Direction
 pub enum SQLJoinMethod {
+    Left,
+    Right,
+    Inner,
+    Outer,
 }
+

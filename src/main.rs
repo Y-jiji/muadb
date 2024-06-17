@@ -6,9 +6,10 @@ mod util_logging;
 mod util_pratt_parser;
 
 // sql modules
-mod sql_parser_expr;
+mod sql_parser_query;
 mod sql_parser_stmt;
 mod sql_parser_space;
+mod sql_parser_schema;
 mod sql_schema;
 mod sql_planner;
 mod sql_compiler;

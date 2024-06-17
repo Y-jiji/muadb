@@ -5,13 +5,15 @@ edition = "2021"
 
 [dependencies]
 auto_impl = "1.2.0"
-bumpalo = { version = "3.16.0", features = ["boxed", "collections"] }
+bumpalo = { version = "3.16.0", features = ["boxed", "collections", "serde", "std"] }
 bytemuck = "1.16.0"
+ciborium = "0.2.2"
 colored = "2.1.0"
 ctor = "0.2.8"
 lazycell = "1.3.0"
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
 rand = "0.8.5"
 rand_xoshiro = "0.6.0"
+serde = { version = "1.0.203", features = ["derive"] }
 smallvec = { version = "1.13.2", features = ["union"] }
 thiserror = "1.0.61"
