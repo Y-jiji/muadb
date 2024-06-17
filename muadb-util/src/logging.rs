@@ -17,7 +17,7 @@ impl Log for StaticLogger {
             }) { break }
         }
     }
-    fn enabled(&self, metadata: &Metadata) -> bool {
+    fn enabled(&self, _: &Metadata) -> bool {
         true
     }
     fn log(&self, record: &Record) {
