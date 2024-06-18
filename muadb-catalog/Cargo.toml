@@ -1,0 +1,11 @@
+[package]
+name = "muadb-catalog"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = "1.16.0"
+casey = "0.4.0"
+ctor = "0.2.8"
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
+muadb-util = { path = "../muadb-util" }
